@@ -1,0 +1,30 @@
+# Secrets (NEVER commit)
+.env
+*.env
+.env.*
+!.env.example
+
+# Logs / runtime
+.logs/
+
+# HAR artifacts from discover_apis.py
+har_*.har
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Playwright
+playwright-report/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

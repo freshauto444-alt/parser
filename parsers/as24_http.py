@@ -1,0 +1,398 @@
+# parsers/as24_http.py
+# AutoScout24 HTTP-only parser — NO Playwright needed.
+#
+# Discovered via HAR analysis (April 2026):
+#   - AS24 is Next.js with __NEXT_DATA__ containing full listing data (20 per page)
+#   - BuildId format: as24-search-funnel_main-YYYYMMDDHHMMSS
+#   - Asset prefix: /assets/as24-search-funnel
+#   - GraphQL auth: Basic as24-search-funnel:<password> (hardcoded in frontend)
+#   - 1 HTTP request = 20 cars with: make, model, price, mileage, fuel, HP, images, location
+#
+# Two approaches (primary + fallback):
+#   1. Direct HTML fetch + __NEXT_DATA__ extraction (most reliable)
+#   2. _next/data JSON endpoint (faster but needs buildId management)
+
+import asyncio
+import json
+import re
+import time
+import random
+from typing import Optional
+from loguru import logger
+
+try:
+    from curl_cffi.requests import AsyncSession
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+    logger.warning("[as24] curl_cffi not installed — using httpx fallback (may get blocked by Akamai)")
+
+if not HAS_CURL_CFFI:
+    import httpx
+
+BASE_URL = "https://www.autoscout24.com"
+
+_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9,de;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+# ── AS24 URL constants and builders (canonical location) ──────────────────────
+
+AS24_FUEL = {"Petrol": "B", "Diesel": "D", "Electric": "E", "Hybrid": "H", "LPG": "L", "CNG": "M"}
+AS24_TRANS = {"Automatic": "A", "Manual": "M"}
+# Codes verified empirically (May 2026):
+#   body=1 → Compact (Golf, Panda, 208)
+#   body=2 → Convertible/Cabrio
+#   body=3 → Coupe
+#   body=4 → SUV / Off-Road
+#   body=5 → Estate / Station Wagon
+#   body=6 → Sedan
+#   body=7 → Camper Van
+#   body=12 → Minivan / MPV
+#   body=13 → Transporter / Truck
+AS24_BODY = {"Sedan": "6", "Hatchback": "1", "Estate": "5", "Coupe": "3", "Convertible": "2", "SUV": "4", "Van": "12", "Pickup": "13"}
+AS24_MODEL_SLUG = {
+    ("bmw", "1 series"): "1er", ("bmw", "2 series"): "2er",
+    ("bmw", "3 series"): "3er", ("bmw", "3er"): "3er",
+    ("bmw", "4 series"): "4er", ("bmw", "5 series"): "5er", ("bmw", "5er"): "5er",
+    ("bmw", "6 series"): "6er", ("bmw", "7 series"): "7er", ("bmw", "8 series"): "8er",
+    ("bmw", "x3"): "x3", ("bmw", "x5"): "x5", ("bmw", "x1"): "x1",
+    ("mercedes-benz", "a-class"): "a-klasse", ("mercedes-benz", "b-class"): "b-klasse",
+    ("mercedes-benz", "c-class"): "c-klasse", ("mercedes-benz", "c-klasse"): "c-klasse",
+    ("mercedes-benz", "e-class"): "e-klasse", ("mercedes-benz", "e-klasse"): "e-klasse",
+    ("mercedes-benz", "s-class"): "s-klasse", ("mercedes-benz", "glc"): "glc", ("mercedes-benz", "gle"): "gle",
+    ("volkswagen", "golf"): "golf", ("volkswagen", "passat"): "passat", ("volkswagen", "tiguan"): "tiguan",
+    ("volvo", "v60"): "v60", ("volvo", "xc60"): "xc60", ("volvo", "xc40"): "xc40",
+    ("audi", "a4"): "a4", ("audi", "a6"): "a6", ("audi", "q5"): "q5",
+    ("toyota", "rav4"): "rav4", ("toyota", "corolla"): "corolla",
+    ("skoda", "octavia"): "octavia", ("skoda", "superb"): "superb",
+    ("porsche", "cayenne"): "cayenne", ("porsche", "macan"): "macan",
+}
+
+
+def build_as24_url(params: dict, page_num: int = 1) -> str:
+    """Build AutoScout24 search URL using path-based format.
+
+    Supports vehicle_type — AutoScout24 has separate path prefixes per type:
+      - Car: /lst/
+      - Motorcycle: /lst/motorrad/
+      - Truck: /lst/ubernutzfahrzeug/   (commercial / LKW)
+      - Camper: /lst/wohnmobil/
+    Brand slugs stay the same (bmw, harley-davidson, etc).
+    """
+    brand = (params.get("brand") or "").lower()
+    model = (params.get("model") or "").lower()
+    vtype = (params.get("vehicle_type") or "Car")
+    # Path prefix per vehicle_type
+    vtype_path = {
+        "Motorcycle": "/lst/motorrad",
+        "Truck": "/lst/ubernutzfahrzeug",
+        "Van": "/lst/ubernutzfahrzeug",
+        "Bus": "/lst/ubernutzfahrzeug",
+        "Camper": "/lst/wohnmobil",
+    }.get(vtype, "/lst")
+
+    model_slug = AS24_MODEL_SLUG.get((brand, model)) or re.sub(r'\s+', '-', model).strip('-')
+
+    if brand and model_slug:
+        url = f"{BASE_URL}{vtype_path}/{brand}/{model_slug}?sort=standard&desc=0&ustate=N%2CU&page={page_num}"
+    elif brand:
+        url = f"{BASE_URL}{vtype_path}/{brand}?sort=standard&desc=0&ustate=N%2CU&page={page_num}"
+    else:
+        url = f"{BASE_URL}{vtype_path}?sort=standard&desc=0&ustate=N%2CU&page={page_num}"
+
+    if params.get("year_from"):
+        url += f"&fregfrom={params['year_from']}"
+    if params.get("year_to"):
+        url += f"&fregto={params['year_to']}"
+    if params.get("price_from"):
+        url += f"&pricefrom={params['price_from']}"
+    if params.get("price_to"):
+        url += f"&priceto={params['price_to']}"
+    fuel_raw = params.get("fuel") or ""
+    for f in fuel_raw.split(","):
+        fc = AS24_FUEL.get(f.strip())
+        if fc: url += f"&fuel={fc}"
+    tc = AS24_TRANS.get(params.get("transmission") or "")
+    if tc: url += f"&gear={tc}"
+    body_raw = params.get("body_type") or ""
+    for b in body_raw.split(","):
+        bc = AS24_BODY.get(b.strip())
+        if bc: url += f"&body={bc}"
+    return url
+
+
+_build_as24_url = build_as24_url  # alias for internal use
+
+
+def _extract_next_data(html: str) -> Optional[dict]:
+    """Extract and parse __NEXT_DATA__ JSON from HTML."""
+    match = re.search(
+        r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+        html, re.DOTALL,
+    )
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"[as24] __NEXT_DATA__ parse error: {e}")
+        return None
+
+
+def parse_listing_from_nextdata(listing: dict) -> dict:
+    """
+    Parse a single listing from AS24 __NEXT_DATA__ pageProps.listings[].
+    Returns a flat dict ready for ParsedCar construction.
+
+    Based on real HAR data structure (April 2026):
+    - listing.vehicle: make, model, modelGroup, variant, fuel, transmission, mileageInKm, engineDisplacementInCCM
+    - listing.vehicleDetails[]: {data, iconName, ariaLabel} — Mileage, Gear, First registration, Fuel type, Power
+    - listing.price: {priceFormatted}
+    - listing.location: {countryCode, zip, city}
+    - listing.images[]: photo URLs
+    - listing.url: detail page path
+    - listing.seller: dealer info
+    """
+    vehicle = listing.get("vehicle", {})
+    location = listing.get("location", {})
+    price_obj = listing.get("price", {})
+
+    # Parse vehicleDetails for structured data (more reliable than vehicle.* fields)
+    vd_map = {}
+    for vd in listing.get("vehicleDetails", []):
+        label = (vd.get("ariaLabel") or "").lower()
+        data = vd.get("data") or ""
+        vd_map[label] = data
+
+    # Make & Model
+    make = vehicle.get("make", "")
+    model = vehicle.get("model", "")
+    model_group = vehicle.get("modelGroup", "")
+
+    # Price — extract number from "€ 32,900" or "€ 32.900"
+    price_str = price_obj.get("priceFormatted", "")
+    price = None
+    if price_str:
+        digits = re.sub(r'[^\d]', '', price_str)
+        if digits:
+            price = int(digits)
+
+    # Mileage — from vehicleDetails "29,840 km" or vehicle.mileageInKm
+    mileage = None
+    mileage_str = vd_map.get("mileage") or vehicle.get("mileageInKm") or ""
+    if mileage_str:
+        digits = re.sub(r'[^\d]', '', str(mileage_str))
+        if digits:
+            mileage = int(digits)
+
+    # Year — from vehicleDetails "10/2022" (First registration)
+    year = None
+    reg_str = vd_map.get("first registration", "")
+    if reg_str:
+        yr_match = re.search(r'(\d{4})', reg_str)
+        if yr_match:
+            year = int(yr_match.group(1))
+
+    # Fuel
+    fuel = vd_map.get("fuel type") or vehicle.get("fuel") or None
+
+    # Transmission
+    transmission = vd_map.get("gear") or vehicle.get("transmission") or None
+
+    # Power — "135 kW (184 hp)"
+    hp = None
+    power_str = vd_map.get("power", "")
+    hp_match = re.search(r'(\d+)\s*hp', power_str)
+    if hp_match:
+        hp = int(hp_match.group(1))
+    elif power_str:
+        kw_match = re.search(r'(\d+)\s*kW', power_str)
+        if kw_match:
+            hp = int(int(kw_match.group(1)) * 1.341)
+
+    # Engine displacement
+    engine = None
+    disp_str = vehicle.get("engineDisplacementInCCM", "")
+    if disp_str:
+        disp_digits = re.sub(r'[^\d]', '', str(disp_str))
+        if disp_digits:
+            cc = int(disp_digits)
+            liters = round(cc / 1000, 1)
+            fuel_short = fuel or ""
+            engine = f"{liters} {fuel_short}".strip() if fuel_short else f"{liters}L"
+
+    # Country — use canonical map from base.py
+    from .base import COUNTRY_CODE_MAP
+    country_code = location.get("countryCode", "")
+    country = COUNTRY_CODE_MAP.get(country_code.upper(), "Europe") if country_code else "Europe"
+
+    # Images — upgrade to higher resolution
+    images = []
+    for img_url in listing.get("images", []):
+        if isinstance(img_url, str) and img_url:
+            # Replace /250x188.webp with /800x600.webp for better quality
+            hi_res = re.sub(r'/\d+x\d+\.\w+$', '/800x600.webp', img_url)
+            images.append(hi_res)
+
+    # Detail URL
+    detail_url = listing.get("url", "")
+    if detail_url and not detail_url.startswith("http"):
+        detail_url = f"{BASE_URL}{detail_url}"
+
+    # Listing ID
+    listing_id = listing.get("id", "")
+
+    return {
+        "id": listing_id,
+        "make": make,
+        "model": model,
+        "model_group": model_group,
+        "variant": vehicle.get("variant", ""),
+        "subtitle": vehicle.get("subtitle", ""),
+        "model_version": vehicle.get("modelVersionInput", ""),
+        "year": year,
+        "price": price,
+        "mileage": mileage,
+        "fuel": fuel,
+        "transmission": transmission,
+        "horsepower": hp,
+        "engine": engine,
+        "country": country,
+        "city": location.get("city", ""),
+        "images": images,
+        "url": detail_url,
+        "seller_type": listing.get("seller", {}).get("type", ""),
+    }
+
+
+async def search(
+    params: dict,
+    max_results: int = 20,
+    sort: str = "standard",
+) -> tuple[list[dict], int]:
+    """
+    Search AutoScout24 via HTTP — extracts __NEXT_DATA__ from HTML.
+    Returns (listings, total_count).
+
+    1 HTTP request = 20 listings with full data.
+    For 40 results = 2 requests. For 60 = 3 requests.
+    """
+    # Build URL using existing function
+    url = _build_as24_url(params, page_num=1)
+
+    # Override sort if needed (sort=age&desc=1 = newest first)
+    if sort == "newest":
+        url = re.sub(r'sort=\w+', 'sort=age', url)
+        url = re.sub(r'desc=\d', 'desc=1', url)
+    elif sort == "price_asc":
+        url = re.sub(r'sort=\w+', 'sort=price', url)
+        url = re.sub(r'desc=\d', 'desc=0', url)
+    elif sort == "mileage_asc":
+        url = re.sub(r'sort=\w+', 'sort=km', url)
+        url = re.sub(r'desc=\d', 'desc=0', url)
+
+    # Create HTTP client.
+    # chrome136 = latest supported fingerprint in curl_cffi 0.13 (2026 Chrome stable).
+    # AS24 is behind Akamai Bot Manager — JA3+JA4+H2 SETTINGS must all match real Chrome.
+    if HAS_CURL_CFFI:
+        client = AsyncSession(impersonate="chrome136", headers=_HEADERS, timeout=20)
+    else:
+        client = httpx.AsyncClient(headers={**_HEADERS, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"}, timeout=20, follow_redirects=True)
+
+    try:
+        all_listings = []
+        total_count = 0
+        pages_to_fetch = max(1, (max_results + 19) // 20)
+        pages_to_fetch = min(pages_to_fetch, 5)
+
+        # ── Page 1: fetch immediately to get total_count ──────────────────
+        page1_url = re.sub(r'page=\d+', 'page=1', url) if 'page=' in url else url + '&page=1'
+        logger.debug(f"[as24] Fetching page 1...")
+
+        from .rate_limiter import acquire as rate_acquire
+        await rate_acquire("autoscout24.com")
+
+        # One retry on 403/429/5xx — Akamai sometimes does a one-off challenge on cold IP.
+        resp = await client.get(page1_url)
+        if resp.status_code in (403, 429, 500, 502, 503) or (resp.status_code == 200 and "__NEXT_DATA__" not in resp.text):
+            await asyncio.sleep(random.uniform(1.5, 3.0))
+            resp = await client.get(page1_url)
+
+        # Record classified outcome for observability
+        try:
+            from .metrics import classify_error, record
+            if resp.status_code != 200:
+                record("autoscout24", classify_error(http_status=resp.status_code),
+                       0, error=f"HTTP {resp.status_code}")
+            elif "__NEXT_DATA__" not in resp.text:
+                record("autoscout24", "blocked", 0,
+                       error=f"challenge page {len(resp.text)}B")
+        except Exception:
+            pass  # metrics must never break scrapes
+
+        if resp.status_code != 200:
+            logger.warning(f"[as24] Page 1 HTTP {resp.status_code}" + (" (challenge?)" if resp.status_code in (403, 429) else ""))
+            return [], 0
+
+        nd = _extract_next_data(resp.text)
+        if not nd:
+            logger.warning(f"[as24] No __NEXT_DATA__ on page 1 — HTML {len(resp.text)}B (likely bot challenge)")
+            return [], 0
+
+        pp = nd.get("props", {}).get("pageProps", {})
+        total_count = pp.get("numberOfResults", 0)
+        for raw in pp.get("listings", []):
+            parsed = parse_listing_from_nextdata(raw)
+            if parsed.get("make"):
+                all_listings.append(parsed)
+
+        logger.info(f"[as24] Page 1: {len(all_listings)} listings (total: {total_count})")
+
+        # ── Pages 2+: fetch in parallel with staggered delays ─────────────
+        if pages_to_fetch > 1 and len(all_listings) < max_results:
+            async def _fetch_page(page_num: int) -> list[dict]:
+                await rate_acquire("autoscout24.com")
+                p_url = re.sub(r'page=\d+', f'page={page_num}', url) if 'page=' in url else url + f'&page={page_num}'
+                try:
+                    r = await client.get(p_url)
+                    if r.status_code == 429:
+                        # Exponential backoff on rate limit
+                        await asyncio.sleep(random.uniform(3, 8))
+                        r = await client.get(p_url)
+                    if r.status_code != 200:
+                        return []
+                    nd2 = _extract_next_data(r.text)
+                    if not nd2:
+                        return []
+                    items = []
+                    for raw in nd2.get("props", {}).get("pageProps", {}).get("listings", []):
+                        p = parse_listing_from_nextdata(raw)
+                        if p.get("make"):
+                            items.append(p)
+                    return items
+                except Exception as e:
+                    logger.debug(f"[as24] Page {page_num} failed: {e}")
+                    return []
+
+            page_tasks = [_fetch_page(p) for p in range(2, pages_to_fetch + 1)]
+            page_results = await asyncio.gather(*page_tasks)
+            for page_listings in page_results:
+                all_listings.extend(page_listings)
+
+            logger.info(f"[as24] Pages 2-{pages_to_fetch}: +{sum(len(r) for r in page_results)} listings")
+
+        return all_listings[:max_results], total_count
+
+    finally:
+        if HAS_CURL_CFFI:
+            await client.close()
+        else:
+            await client.aclose()

@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+playwright
+supabase
+python-dotenv
+loguru
+pydantic
+aiohttp
+httpx
+curl_cffi
+cachetools
+blocket-api
+beautifulsoup4
+sse-starlette
+anthropic

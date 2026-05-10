@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+startCommand = "sh -c 'uvicorn parsers.api_server:app --host 0.0.0.0 --port ${PORT:-8000}'"
+
+# Hot deals + warmup cron — keeps DB fresh with popular models
+[cron]
+schedule = "0 */6 * * *"
+command = "python3 -m parsers.main hot"
