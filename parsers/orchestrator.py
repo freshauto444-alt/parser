@@ -3,6 +3,7 @@
 # Parallel scraping of 4 sites + cache-on-read + singleflight + SSE streaming.
 
 import asyncio
+import os
 import re
 from typing import AsyncIterator
 from loguru import logger
@@ -11,6 +12,38 @@ from .base import ParsedCar
 from .cache import cache_key, get_or_scrape
 from .resilience import get_breaker
 from .config import SEK_TO_EUR, DEFAULT_MAX_RESULTS, get_sek_to_eur
+
+
+# ── Background DB save for user-search results ───────────────────────────────
+# Every cold scrape persists its unique cars to Supabase with
+# source_type='parser_search'. This way cars from ad-hoc /search/instant
+# requests show up on the site's /order listing alongside the curated
+# hot-deals batch, instead of vanishing after the 30-min memory cache expires.
+#
+# Fire-and-forget: the save runs as a detached asyncio task so the HTTP
+# response to the user isn't delayed by Supabase round-trips.
+_SEARCH_RESULT_TTL_HOURS = 48
+
+
+async def _persist_search_results(cars: list[ParsedCar]) -> None:
+    if not cars:
+        return
+    url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        return
+    try:
+        from supabase import create_client
+        from .db import save as db_save
+        client = create_client(url, key)
+        # Supabase client is sync — run in a thread to avoid blocking the loop.
+        saved, updated, errors = await asyncio.to_thread(
+            db_save, cars, client, "parser_search", None, None, _SEARCH_RESULT_TTL_HOURS,
+        )
+        logger.info(f"[db:search] persisted {saved} new + {updated} updated + {errors} errors")
+    except Exception as e:
+        # Background task — never let this crash the user-facing search.
+        logger.warning(f"[db:search] persist failed: {e}")
 
 # Model name normalization per site
 # AS24 uses "3er", "4er", "c-klasse" — other sites need different names
@@ -574,6 +607,15 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
             record_prices(unique, source="search")
         except Exception:
             pass  # never block search for analytics
+
+    # Background DB save — every cold scrape persists its cars so they show
+    # up on the site's /order page alongside the hot-deals batch.
+    # Detached: won't delay the search response.
+    if unique:
+        try:
+            asyncio.create_task(_persist_search_results(unique))
+        except Exception:
+            pass
 
     return unique
 
