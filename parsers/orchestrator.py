@@ -658,6 +658,15 @@ def _apply_user_filters(cars: list[ParsedCar], params: dict) -> list[ParsedCar]:
         ("transmission", lambda c: c.transmission, _SOURCES_WITH_TRANS_FILTER),
         ("body_type", lambda c: c.body_type, _SOURCES_WITH_BODY_FILTER),
     ]
+    # Body-type aliases — different inputs that the user really means the same
+    # category. The site form has both "Пікап" (→ Pickup) and "Вантажівка"
+    # (→ Truck), but parser-side every common Ranger/F-150/Amarok-style model
+    # is normalized to "Pickup". Without this alias, a user who selected
+    # "Вантажівка" would never see Ford Ranger because pickup != truck.
+    _BODY_ALIASES = {
+        "truck": {"truck", "pickup"},
+        "pickup": {"pickup", "truck"},
+    }
     for field_name, getter, trust_sources in strict_filters:
         wanted = (params.get(field_name) or "").strip()
         if not wanted:
@@ -665,6 +674,11 @@ def _apply_user_filters(cars: list[ParsedCar], params: dict) -> list[ParsedCar]:
         wanted_set = {w.strip().lower() for w in wanted.split(",") if w.strip()}
         if not wanted_set:
             continue
+        if field_name == "body_type":
+            expanded = set(wanted_set)
+            for w in wanted_set:
+                expanded |= _BODY_ALIASES.get(w, set())
+            wanted_set = expanded
         before = len(cars)
 
         def _keep(c, getter=getter, wanted_set=wanted_set, trust=trust_sources) -> bool:
