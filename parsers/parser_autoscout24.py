@@ -146,21 +146,38 @@ async def parse_http(params: dict, max_results: int = 20) -> list[ParsedCar]:
             logger.debug(f"[as24:http] Failed to parse listing: {e}")
             continue
 
-    # Enrich a small number of cars with detail-page quality signals.
-    # Each detail fetch = 1 HTTP roundtrip + rate_limiter; 8 cars ≈ 2s with
-    # semaphore=8 concurrent. More than that → scrape timeout (35s).
+    # Enrich a portion of cars with detail-page data. AS24's list page does NOT
+    # carry features/safety/comfort/infotainment — those exist only on the
+    # vehicle detail page. So without enrichment, features are entirely missing.
+    #
+    # Two-stage strategy:
+    #   1. Synchronous: enrich first 30 cars before returning. Adds ~2-3s to
+    #      cold scrape but raises foreground feature coverage from ~16% (8/50)
+    #      to ~60% (30/50). Token bucket has 30 tokens burst capacity — using
+    #      most of it once per search is acceptable.
+    #   2. Background (fire-and-forget): enrich the remaining cars after the
+    #      response has returned. Updates the in-memory ParsedCar objects in
+    #      place; orchestrator's background DB save picks them up and writes
+    #      the enriched rows to Supabase, so /order eventually surfaces full
+    #      feature lists for ALL scraped cars without delaying first paint.
     if cars:
-        enrich_count = min(8, len(cars))
-        await _enrich_top_results(cars, enrich_count)
+        sync_count = min(30, len(cars))
+        await _enrich_top_results(cars, sync_count)
+        # Background enrich for the rest. asyncio.create_task is detached;
+        # if the request handler returns before this completes, the loop
+        # keeps running it until done (or 30s timeout).
+        if len(cars) > sync_count:
+            asyncio.create_task(_enrich_top_results(cars[sync_count:], len(cars) - sync_count))
 
-    logger.info(f"[as24:http] {len(cars)} cars from {total} total ({min(8, len(cars))} enriched)")
+    enriched_now = min(30, len(cars))
+    logger.info(f"[as24:http] {len(cars)} cars from {total} total ({enriched_now} sync-enriched)")
     return cars
 
 
 async def _enrich_top_results(cars: list[ParsedCar], count: int):
     """Fetch detail pages for top N cars to get color, drive, features, better photos."""
     import httpx as _httpx
-    semaphore = asyncio.Semaphore(8)
+    semaphore = asyncio.Semaphore(15)
 
     from .rate_limiter import acquire as _rl
 
