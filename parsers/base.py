@@ -470,6 +470,31 @@ def normalize_body_type(raw: str) -> tuple[Optional[str], Optional[str]]:
     en = BODY_EN.get(key)
     if en:
         return en, BODY_UA.get(en)
+
+    # Brand-specific Estate-variant keywords — must be checked BEFORE the
+    # generic substring loop, otherwise "Avant" would match "van" inside
+    # BODY_EN and become misclassified as a Van. These are all common AS24
+    # variant strings for the Estate body of European cars:
+    #   Volkswagen Passat Variant, Golf Variant
+    #   Audi A4/A6 Avant, A6 Allroad
+    #   BMW 3/5 Series Touring
+    #   Mercedes E-Class T-Modell, CLA Shooting Brake
+    #   Peugeot 308/508 SW (Sports Wagon)
+    #   Opel Astra Sports Tourer, Insignia Country Tourer
+    #   Skoda Octavia/Superb Combi, Octavia Scout
+    #   Volvo V60/V90 Cross Country
+    #   VW Passat Alltrack
+    #   Toyota Corolla Touring Sports / Sportstourer
+    #   Cupra Leon Sportstourer
+    ESTATE_VARIANT_TOKENS = (
+        "variant", "avant", "touring", "t-modell", "tmodell", "sportstourer",
+        "sports tourer", "shooting brake", "country tourer", "cross country",
+        "alltrack", "allroad", "scout", " sw", "combi", "kombi", "wagon",
+    )
+    for tok in ESTATE_VARIANT_TOKENS:
+        if tok in key:
+            return "Estate", BODY_UA.get("Estate")
+
     for p, ev in BODY_EN.items():
         if p in key:
             return ev, BODY_UA.get(ev)
