@@ -87,7 +87,13 @@ def build_as24_url(params: dict, page_num: int = 1) -> str:
       - Camper: /lst/wohnmobil/
     Brand slugs stay the same (bmw, harley-davidson, etc).
     """
-    brand = (params.get("brand") or "").lower()
+    # Slugify brand for AS24 path: "Aston Martin" → "aston-martin",
+    # "Land Rover" → "land-rover", "Alfa Romeo" → "alfa-romeo". Mercedes-Benz
+    # and Rolls-Royce already carry a dash, so this is a no-op for them.
+    # Without slugification, the brand goes into the URL path with a literal
+    # space and AS24 silently strips it, returning unfiltered results.
+    brand_raw = (params.get("brand") or "").lower()
+    brand = re.sub(r"\s+", "-", brand_raw).strip("-")
     model = (params.get("model") or "").lower()
     vtype = (params.get("vehicle_type") or "Car")
     # Path prefix per vehicle_type
