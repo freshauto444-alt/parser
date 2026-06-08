@@ -74,6 +74,37 @@ AS24_MODEL_SLUG = {
     ("toyota", "rav4"): "rav4", ("toyota", "corolla"): "corolla",
     ("skoda", "octavia"): "octavia", ("skoda", "superb"): "superb",
     ("porsche", "cayenne"): "cayenne", ("porsche", "macan"): "macan",
+
+    # Performance trims (AMG / M / RS) → route to base-class URL. AS24 has no
+    # /mercedes-benz/e-63 page, so a direct slug returns 404 and we miss the
+    # biggest source. Sending to /e-klasse returns all E-Class cars; the
+    # client filter (filterCarsClientSide) narrows back to the specific trim.
+    # Mercedes-AMG
+    ("mercedes-benz", "e 63"): "e-klasse", ("mercedes-benz", "e63"): "e-klasse",
+    ("mercedes-benz", "e 53"): "e-klasse", ("mercedes-benz", "e 43"): "e-klasse",
+    ("mercedes-benz", "c 63"): "c-klasse", ("mercedes-benz", "c63"): "c-klasse",
+    ("mercedes-benz", "c 43"): "c-klasse",
+    ("mercedes-benz", "s 63"): "s-klasse", ("mercedes-benz", "s 65"): "s-klasse",
+    ("mercedes-benz", "a 45"): "a-klasse", ("mercedes-benz", "a 35"): "a-klasse",
+    ("mercedes-benz", "cla 45"): "cla", ("mercedes-benz", "cla 35"): "cla",
+    ("mercedes-benz", "gla 45"): "gla", ("mercedes-benz", "gla 35"): "gla",
+    ("mercedes-benz", "glc 63"): "glc", ("mercedes-benz", "glc 43"): "glc",
+    ("mercedes-benz", "gle 63"): "gle", ("mercedes-benz", "gle 53"): "gle",
+    ("mercedes-benz", "g 63"): "g-klasse", ("mercedes-benz", "g 65"): "g-klasse",
+    ("mercedes-benz", "cls 53"): "cls", ("mercedes-benz", "cls 63"): "cls",
+    # BMW M
+    ("bmw", "m2"): "2er", ("bmw", "m3"): "3er", ("bmw", "m4"): "4er",
+    ("bmw", "m5"): "5er", ("bmw", "m6"): "6er", ("bmw", "m8"): "8er",
+    ("bmw", "x3 m"): "x3", ("bmw", "x4 m"): "x4",
+    ("bmw", "x5 m"): "x5", ("bmw", "x6 m"): "x6",
+    # Audi RS / S
+    ("audi", "rs3"): "a3", ("audi", "rs4"): "a4", ("audi", "rs5"): "a5",
+    ("audi", "rs6"): "a6", ("audi", "rs7"): "a7",
+    ("audi", "rs q3"): "q3", ("audi", "rs q8"): "q8",
+    ("audi", "s3"): "a3", ("audi", "s4"): "a4", ("audi", "s5"): "a5",
+    ("audi", "s6"): "a6", ("audi", "s7"): "a7", ("audi", "s8"): "a8",
+    # VW Golf R / GTI map to base "golf"
+    ("volkswagen", "golf r"): "golf", ("volkswagen", "golf gti"): "golf",
 }
 
 
