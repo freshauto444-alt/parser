@@ -107,6 +107,21 @@ AS24_MODEL_SLUG = {
     ("volkswagen", "golf r"): "golf", ("volkswagen", "golf gti"): "golf",
 }
 
+# AS24 uses a `cat=ma{brand}gr{group}mt{trim}` query param to filter to a
+# specific performance variant directly (no broader-class fallback needed).
+# Discovered by inspecting AS24's faceted-search URLs. When a key matches
+# here, we hit /lst/{brand}?cat=… instead of /lst/{brand}/{slug} and the
+# upstream returns only the requested trim — no client-side narrowing
+# required and source counts jump from a handful to hundreds.
+#
+# To add a variant: open AS24 search UI, pick the brand + AMG/M/RS trim,
+# copy the `cat=` value from the URL bar.
+AS24_MODEL_CAT = {
+    # Mercedes-AMG E63 (all generations) — 243 results across DE/AT/BE/ES/FR/IT/LU/NL
+    ("mercedes-benz", "e 63"): "ma47gr100061mt467",
+    ("mercedes-benz", "e63"): "ma47gr100061mt467",
+}
+
 
 def build_as24_url(params: dict, page_num: int = 1) -> str:
     """Build AutoScout24 search URL using path-based format.
@@ -136,9 +151,15 @@ def build_as24_url(params: dict, page_num: int = 1) -> str:
         "Camper": "/lst/wohnmobil",
     }.get(vtype, "/lst")
 
+    # Performance-trim cat code takes precedence over the slug path — it lands
+    # on AS24's exact-trim faceted page (e.g. only E63 AMG cars) instead of
+    # the broader base-class URL.
+    model_cat = AS24_MODEL_CAT.get((brand, model))
     model_slug = AS24_MODEL_SLUG.get((brand, model)) or re.sub(r'\s+', '-', model).strip('-')
 
-    if brand and model_slug:
+    if brand and model_cat:
+        url = f"{BASE_URL}{vtype_path}/{brand}?cat={model_cat}&sort=standard&desc=0&ustate=N%2CU&page={page_num}"
+    elif brand and model_slug:
         url = f"{BASE_URL}{vtype_path}/{brand}/{model_slug}?sort=standard&desc=0&ustate=N%2CU&page={page_num}"
     elif brand:
         url = f"{BASE_URL}{vtype_path}/{brand}?sort=standard&desc=0&ustate=N%2CU&page={page_num}"
