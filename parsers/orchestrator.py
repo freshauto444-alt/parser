@@ -169,7 +169,9 @@ async def _blocket(params: dict, n: int) -> list[ParsedCar]:
         return await parse_blocket(
             ctx, rate,
             brand=params.get("brand", ""), model=params.get("model", ""),
-            year_from=params.get("year_from", 2018), max_results=n,
+            year_from=params.get("year_from", 2018),
+            year_to=params.get("year_to"),
+            max_results=n,
             fuel=fuel, transmission=params.get("transmission"),
             body_type=body_type,
             price_to_eur=params.get("price_to"),

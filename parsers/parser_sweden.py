@@ -1036,6 +1036,7 @@ async def parse_blocket(
     brand: str = "",
     model: str = "",
     year_from: int = 2018,
+    year_to: Optional[int] = None,
     max_results: int = 30,
     fuel: Optional[str] = None,
     transmission: Optional[str] = None,
