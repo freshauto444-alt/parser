@@ -1063,14 +1063,29 @@ async def parse_blocket(
     path_seg, cg = _vt_map.get(vehicle_type, ("bilar", "1020"))
     base = f"https://www.blocket.se/annonser/hela_sverige/fordon/{path_seg}"
 
-    # Note: Blocket doesn't have native filters for body_type/fuel/price in URL.
-    # We rely on free-text query for brand+model and post-filter strictly upstream
-    # (see orchestrator strict_filters — Blocket is not in SOURCES_WITH_*_FILTER).
+    # Blocket packs additional filters into the URL-encoded `params=` blob —
+    # multiple `key=value` pairs glued together with URL-encoded `&` (%26).
+    # Adding year (mreg_min/mreg_max) tightens results; without it Blocket
+    # returned 42 Honda Accords of 2003-2010 for a 2019-2022 query. Price
+    # filter is in SEK on Blocket so we convert from EUR with the existing
+    # rate.
+    params_kv = ["item_condition=used"]
+    if year_from:
+        params_kv.append(f"mreg_min={year_from}")
+    if year_to:
+        params_kv.append(f"mreg_max={year_to}")
+    if price_to_eur and sek_to_eur_rate > 0:
+        price_to_sek = int(round(price_to_eur / sek_to_eur_rate))
+        params_kv.append(f"price_max={price_to_sek}")
+    # URL-encode `=` and `&` per Blocket convention so the whole stays in a
+    # single `params=` query value.
+    params_blob = "%26".join(p.replace("=", "%3D") for p in params_kv)
+
     if brand:
         q = f"{brand}+{model}".strip("+ ")
-        url = f"{base}?sort=date&cg={cg}&q={q}&params=item_condition%3Dused"
+        url = f"{base}?sort=date&cg={cg}&q={q}&params={params_blob}"
     else:
-        url = f"{base}?sort=date&cg={cg}&params=item_condition%3Dused"
+        url = f"{base}?sort=date&cg={cg}&params={params_blob}"
 
     logger.info(f"[blocket] {url}")
     cards_data: list[dict] = []

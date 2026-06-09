@@ -757,15 +757,22 @@ async def search(params: dict, max_results: int = DEFAULT_MAX_RESULTS) -> list[P
 
     # Post-cache year filter — AS24's &fregto= URL filter occasionally leaks
     # newer cars (e.g. 2024 in a year_to=2023 query). Enforce strictly here.
+    # When client asked for 2018+ (modern), DROP cars with year=None — Blocket
+    # listings of old beaters (2003-2010 Honda Accord etc.) routinely arrive
+    # without regdate and were polluting the result set for modern queries.
     year_from = params.get("year_from")
     year_to = params.get("year_to")
     if year_from or year_to:
-        results = [
-            c for c in results
-            if c.year is None
-            or ((not year_from or c.year >= year_from)
-                and (not year_to or c.year <= year_to))
-        ]
+        strict_unknown_year = bool(year_from and year_from >= 2018)
+        def _year_ok(c):
+            if c.year is None:
+                return not strict_unknown_year
+            if year_from and c.year < year_from:
+                return False
+            if year_to and c.year > year_to:
+                return False
+            return True
+        results = [c for c in results if _year_ok(c)]
 
     # Post-cache user-strict filters (body_type/fuel/transmission/drive/color/etc.)
     # Same cached set serves any combination of these without re-scraping.
@@ -821,12 +828,16 @@ async def search_stream(
         year_from = params.get("year_from")
         year_to = params.get("year_to")
         if year_from or year_to:
-            results = [
-                c for c in results
-                if c.year is None
-                or ((not year_from or c.year >= year_from)
-                    and (not year_to or c.year <= year_to))
-            ]
+            strict_unknown_year_2 = bool(year_from and year_from >= 2018)
+            def _year_ok_2(c):
+                if c.year is None:
+                    return not strict_unknown_year_2
+                if year_from and c.year < year_from:
+                    return False
+                if year_to and c.year > year_to:
+                    return False
+                return True
+            results = [c for c in results if _year_ok_2(c)]
         results = _apply_user_filters(results, params)
         if results:
             yield "cache", results
