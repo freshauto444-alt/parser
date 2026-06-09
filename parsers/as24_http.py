@@ -117,9 +117,17 @@ AS24_MODEL_SLUG = {
 # To add a variant: open AS24 search UI, pick the brand + AMG/M/RS trim,
 # copy the `cat=` value from the URL bar.
 AS24_MODEL_CAT = {
-    # Mercedes-AMG E63 (all generations) — 243 results across DE/AT/BE/ES/FR/IT/LU/NL
+    # Mercedes-AMG E63 (all generations) — 248 results across DE/AT/BE/ES/FR/IT/LU/NL.
+    # mt467 = AMG 4.0 V8 biturbo motortype_id; gr100061 = E-Klasse modelGroup;
+    # ma47 = Mercedes-Benz makeId.
     ("mercedes-benz", "e 63"): "ma47gr100061mt467",
     ("mercedes-benz", "e63"): "ma47gr100061mt467",
+
+    # Kia Ceed group — pilot for non-AMG cat lookups. /lst/kia/ceed (path-based)
+    # was returning only 169 cars; cat=ma39gr200738 returns 939 (includes Ceed,
+    # Ceed SW, all gens). ma39 = Kia makeId, gr200738 = Ceed modelGroup value
+    # from taxonomy.modelGroups. No mt suffix = all motor variants.
+    ("kia", "ceed"): "ma39gr200738",
 }
 
 
