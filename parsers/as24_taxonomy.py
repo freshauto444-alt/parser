@@ -99,6 +99,52 @@ _MB_CLASS_RX = re.compile(r"^([a-z]{1,3})[\s-]?(?:klasse|class)$", re.IGNORECASE
 # Performance-trim pattern: "e 63", "c 43", "s 65", "a 45", "gle 63" — letter(s)
 # + 1-3 digits.  Used to derive the base class + numeric trim for motor lookup.
 _PERF_RX = re.compile(r"^([a-z]{1,4})\s*(\d{2,3})(?:\s+(?:amg|s))?$", re.IGNORECASE)
+# Body-style suffix that the AI occasionally tacks onto a model name even
+# though body_type is supposed to be a separate filter. Strip these before
+# group lookup — taxonomy only stores base models ("a6", not "a6 avant").
+_BODY_SUFFIX_RX = re.compile(
+    r"\s+(?:"
+    r"avant|touring|estate|sportback|sw|combi|kombi|"
+    r"convertible|cabriolet|cabrio|coupé|coupe|"
+    r"hatchback|saloon|sedan|wagon|"
+    r"[35][\s-]?door[s]?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_body_suffix(model_norm: str) -> str:
+    return _BODY_SUFFIX_RX.sub("", model_norm).strip()
+
+
+# AS24 stores BMW series under German labels (3er, not "3 Series") and the
+# MINI Cooper hatchback under the "Mini" group label. Map English / informal
+# inputs the AI and users actually type to those internal labels.
+_GROUP_ALIASES: dict[tuple[str, str], str] = {
+    # BMW English → German
+    ("bmw", "1 series"): "1er", ("bmw", "2 series"): "2er",
+    ("bmw", "3 series"): "3er", ("bmw", "4 series"): "4er",
+    ("bmw", "5 series"): "5er", ("bmw", "6 series"): "6er",
+    ("bmw", "7 series"): "7er", ("bmw", "8 series"): "8er",
+    # MINI: "cooper" maps to the base "Mini" group (Cooper hatchback)
+    ("mini", "cooper"): "mini",
+    ("mini", "cooper s"): "mini",
+    ("mini", "john cooper works"): "mini",
+    ("mini", "jcw"): "mini",
+    # Mercedes English → German (most already match via label_norm but a few inputs miss)
+    ("mercedes-benz", "a-class"): "a-klasse",
+    ("mercedes-benz", "b-class"): "b-klasse",
+    ("mercedes-benz", "c-class"): "c-klasse",
+    ("mercedes-benz", "e-class"): "e-klasse",
+    ("mercedes-benz", "g-class"): "g-klasse",
+    ("mercedes-benz", "s-class"): "s-klasse",
+    ("mercedes-benz", "v-class"): "v-klasse",
+    # Tesla
+    ("tesla", "model3"): "model 3",
+    ("tesla", "models"): "model s",
+    ("tesla", "modely"): "model y",
+    ("tesla", "modelx"): "model x",
+}
 
 
 def _resolve_motor(brand_slug: str, group_id: int, trim_digits: str) -> Optional[int]:
@@ -133,10 +179,26 @@ def resolve_cat(brand: str, model: str) -> Optional[str]:
 
     model_norm = _normalize_model(model)
 
-    # 1. Exact group match — handles "ceed", "m3", "rs6", "golf", "passat".
-    group_id = _GROUPS.get((brand_slug, model_norm))
-    if group_id is not None:
-        return f"ma{make_id}gr{group_id}"
+    # Build the list of label candidates we'll try against the group table.
+    # Order matters — the first hit wins, so we try exact first, then
+    # body-stripped, then aliased (so a user typing "BMW 3 series Touring"
+    # resolves via strip("touring") → alias("3 series") → "3er").
+    candidates: list[str] = []
+    def _add(label: str | None):
+        if label and label not in candidates:
+            candidates.append(label)
+
+    _add(model_norm)
+    _add(_GROUP_ALIASES.get((brand_slug, model_norm)))
+    stripped = _strip_body_suffix(model_norm)
+    if stripped != model_norm:
+        _add(stripped)
+        _add(_GROUP_ALIASES.get((brand_slug, stripped)))
+
+    for cand in candidates:
+        group_id = _GROUPS.get((brand_slug, cand))
+        if group_id is not None:
+            return f"ma{make_id}gr{group_id}"
 
     # 2. Mercedes-style AMG trim: "e 63" → base class "e-klasse" + motor 467.
     perf = _PERF_RX.match(model_norm)
