@@ -263,20 +263,30 @@ async def harvest_group_motors(
     group: dict,
     semaphore: asyncio.Semaphore,
 ) -> int:
+    """
+    Make TWO requests per group with different sort orders. The default
+    sort=standard shows the most popular motors (typical E 220 / E 300 /
+    Ceed 1.4) but rare-but-important performance variants (E 63 AMG, E 53,
+    Ceed GT) only appear on sort=price&desc=1 — they're the most expensive
+    listings. Merging both sweeps catches the long tail.
+    """
     async with semaphore:
         slug = brand["slug"]
         make_id = brand["make_id"]
         group_id = int(group["group_id"])
-        url = (
-            f"{BASE}/lst/{slug}?cat=ma{make_id}gr{group_id}"
-            f"&sort=standard&ustate=N%2CU"
-        )
-        html = await fetch_html(client, url)
-        if not html:
+        base_url = f"{BASE}/lst/{slug}?cat=ma{make_id}gr{group_id}&ustate=N%2CU"
+
+        combined_html_chunks: list[str] = []
+        for sort_q in ("sort=standard", "sort=price&desc=1"):
+            html = await fetch_html(client, f"{base_url}&{sort_q}")
+            if html:
+                combined_html_chunks.append(html)
+
+        if not combined_html_chunks:
             logger.debug(f"[{slug}/gr{group_id}] empty html")
             return 0
 
-        rows = parse_motors_from_html(html, brand["label"])
+        rows = parse_motors_from_html("\n".join(combined_html_chunks), brand["label"])
         if not rows:
             return 0
 
