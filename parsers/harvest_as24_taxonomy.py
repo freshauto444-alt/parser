@@ -320,18 +320,30 @@ async def run_phase1(brand_filter: Optional[str] = None) -> None:
     logger.info(f"Phase 1 done: {ok_brands}/{len(results)} brands, {total_groups} groups upserted")
 
 
+def _read_all(supabase, table: str, page_size: int = 1000) -> list[dict]:
+    """Supabase select() defaults to a 1000-row cap. Paginate via .range()."""
+    out: list[dict] = []
+    start = 0
+    while True:
+        res = supabase.table(table).select("*").range(start, start + page_size - 1).execute()
+        chunk = res.data or []
+        out.extend(chunk)
+        if len(chunk) < page_size:
+            break
+        start += page_size
+    return out
+
+
 async def run_phase2(brand_filter: Optional[str] = None) -> None:
     supabase = supabase_client()
     # Read brand+group plan straight from the DB so phase 2 always reflects
-    # what phase 1 just wrote.
-    brands_res = supabase.table("as24_brands").select("*").execute()
-    brands = brands_res.data or []
+    # what phase 1 just wrote. _read_all paginates past the 1000-row default.
+    brands = _read_all(supabase, "as24_brands")
     if brand_filter:
         brands = [b for b in brands if b["slug"] == brand_filter]
     brands_by_slug = {b["slug"]: b for b in brands}
 
-    groups_res = supabase.table("as24_groups").select("*").execute()
-    all_groups = groups_res.data or []
+    all_groups = _read_all(supabase, "as24_groups")
     if brand_filter:
         all_groups = [g for g in all_groups if g["brand_slug"] == brand_filter]
 
