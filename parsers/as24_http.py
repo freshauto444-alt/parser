@@ -159,10 +159,16 @@ def build_as24_url(params: dict, page_num: int = 1) -> str:
         "Camper": "/lst/wohnmobil",
     }.get(vtype, "/lst")
 
-    # Performance-trim cat code takes precedence over the slug path — it lands
-    # on AS24's exact-trim faceted page (e.g. only E63 AMG cars) instead of
-    # the broader base-class URL.
-    model_cat = AS24_MODEL_CAT.get((brand, model))
+    # Resolution priority for the cat= facet code (best → worst):
+    #   1. Live taxonomy lookup in Supabase (as24_taxonomy.resolve_cat).
+    #      Covers 287 brands × 2486 groups × 1878 motors harvested from
+    #      AS24's __NEXT_DATA__. cat=ma+gr (and +mt for Mercedes AMG) gives
+    #      5× more results than slug paths on average.
+    #   2. AS24_MODEL_CAT — legacy hand-curated entries (E63, Ceed pilot).
+    #   3. AS24_MODEL_SLUG → path-based URL, the original fallback.
+    # We try each in order and emit the cat-URL as soon as we get a hit.
+    from .as24_taxonomy import resolve_cat as _resolve_cat_db
+    model_cat = _resolve_cat_db(brand, model) or AS24_MODEL_CAT.get((brand, model))
     model_slug = AS24_MODEL_SLUG.get((brand, model)) or re.sub(r'\s+', '-', model).strip('-')
 
     if brand and model_cat:
