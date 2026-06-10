@@ -160,6 +160,7 @@ def _parse_ad(ad: dict, min_year: int, min_price: float, max_mileage: int) -> Op
 
     # Engine — multiple strategies to extract displacement
     engine = None
+    engine_cc = None  # exact displacement in cc, for numeric volume filtering
 
     # Strategy 1: cubicCapacity from API (in cc) → liters
     cubic = ad.get("cubicCapacity") or ad.get("displacement") or ad.get("engineSize")
@@ -167,6 +168,7 @@ def _parse_ad(ad: dict, min_year: int, min_price: float, max_mileage: int) -> Op
         try:
             cc = int(cubic)
             if cc > 100:  # sanity check — cc not liters
+                engine_cc = cc
                 liters = round(cc / 1000, 1)
                 engine = f"{liters} {fuel}".strip() if fuel else str(liters)
         except (ValueError, TypeError):
@@ -301,6 +303,7 @@ def _parse_ad(ad: dict, min_year: int, min_price: float, max_mileage: int) -> Op
         transmission=transmission,
         horsepower=horsepower,
         engine=engine,
+        engine_cc=engine_cc,
         drive=drive,
         body_type=body_type,
         body_type_ua=body_type_ua,
@@ -363,16 +366,23 @@ async def _fetch_detail_features(
             ad = detail.get("ad", detail)
 
             # Engine: cubicCapacity from detail if not found in search
-            if not car.engine or (car.horsepower and car.engine.startswith(str(car.horsepower))):
+            if not car.engine or not car.engine_cc or (car.horsepower and car.engine.startswith(str(car.horsepower))):
                 cubic = ad.get("cubicCapacity") or ad.get("displacement")
                 if cubic:
                     try:
                         cc = int(cubic)
                         if cc > 100:
+                            car.engine_cc = cc
                             liters = round(cc / 1000, 1)
                             car.engine = f"{liters} {car.fuel}".strip()
                     except (ValueError, TypeError):
                         pass
+
+            # Description (free-text seller notes) — same detail call, no extra cost.
+            if not car.description:
+                desc = ad.get("description") or ad.get("freetext") or ad.get("text") or ""
+                if isinstance(desc, str) and desc.strip():
+                    car.description = decode_html(desc).strip()[:2000]
 
             # Features / equipment
             features_raw = (
