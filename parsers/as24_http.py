@@ -290,17 +290,13 @@ def parse_listing_from_nextdata(listing: dict) -> dict:
         if kw_match:
             hp = int(int(kw_match.group(1)) * 1.341)
 
-    # Engine displacement — already in the list payload, so engine_cc is free
-    # (no detail fetch needed). engine_cc is the exact cc; engine is the liter string.
+    # Engine displacement
     engine = None
-    engine_cc = None
     disp_str = vehicle.get("engineDisplacementInCCM", "")
     if disp_str:
         disp_digits = re.sub(r'[^\d]', '', str(disp_str))
         if disp_digits:
             cc = int(disp_digits)
-            if cc > 100:  # sanity: real displacement in cc, not a stray small number
-                engine_cc = cc
             liters = round(cc / 1000, 1)
             fuel_short = fuel or ""
             engine = f"{liters} {fuel_short}".strip() if fuel_short else f"{liters}L"
@@ -341,7 +337,6 @@ def parse_listing_from_nextdata(listing: dict) -> dict:
         "transmission": transmission,
         "horsepower": hp,
         "engine": engine,
-        "engine_cc": engine_cc,
         "country": country,
         "city": location.get("city", ""),
         "images": images,

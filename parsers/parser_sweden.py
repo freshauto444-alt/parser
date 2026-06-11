@@ -289,22 +289,6 @@ def _parse_bytbil_detail(html: str, url: str) -> dict:
             fuel_short = result.get("fuel") or ""
             result["engine"] = f"{eng_m.group(1)} {fuel_short}".strip()
 
-    # ── engine_cc (exact displacement in cc) ─────────────────────────────────
-    # Prefer an explicit cc value from the spec table (Swedish ads list
-    # "motorvolym"/"cylindervolym" in cm³). Otherwise approximate from the
-    # parsed liter string (×1000) so numeric volume filtering still works.
-    cc_spec = " ".join(
-        v for k, v in spec.items()
-        if k in ("motorvolym", "cylindervolym", "slagvolym")
-    )
-    cc_m = re.search(r'\b(\d{3,5})\s*(?:cm³|cm3|ccm|cc|kubik)?\b', cc_spec)
-    if cc_m and int(cc_m.group(1)) >= 600:
-        result["engine_cc"] = int(cc_m.group(1))
-    elif result.get("engine"):
-        lit_m = re.search(r'([1-9]\.\d)', result["engine"])
-        if lit_m:
-            result["engine_cc"] = int(round(float(lit_m.group(1)) * 1000))
-
     # ── Photos — keep CDN URL as-is from the page ────────────────────────
     # Bytbil uses BigBuy CDN (bbcdn.io). The `rule=legacy-<preset>` query
     # chooses resolution. We previously upgraded to `legacy-hires` for 1600px
@@ -576,7 +560,6 @@ async def parse_bytbil(
                     transmission=d.get("transmission"),
                     horsepower=d.get("horsepower"),
                     engine=d.get("engine"),
-                    engine_cc=d.get("engine_cc"),
                     drive=d.get("drive"),
                     body_type=d.get("body_type"),
                     body_type_ua=d.get("body_type_ua"),

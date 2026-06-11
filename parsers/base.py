@@ -1443,8 +1443,6 @@ def build_db_row(
         "transmission": car.transmission or "Automatic",
         "horsepower": car.horsepower,
         "engine": car.engine,
-        "engine_cc": car.engine_cc,
-        "description": car.description,
         "drive": car.drive or "Unknown",
         "body_type": car.body_type or "Unknown",
         "body_type_ua": car.body_type_ua or BODY_UA.get(car.body_type or "", "Невідомо"),
