@@ -128,6 +128,22 @@ AS24_MODEL_CAT = {
     # Ceed SW, all gens). ma39 = Kia makeId, gr200738 = Ceed modelGroup value
     # from taxonomy.modelGroups. No mt suffix = all motor variants.
     ("kia", "ceed"): "ma39gr200738",
+
+    # Mercedes GL-family SUVs — the bare path slugs (/mercedes-benz/gls etc.)
+    # return 404 on AS24, so these MUST go through the cat= facet. They were
+    # missing from the harvested Supabase taxonomy, so resolve_cat() returned
+    # None and the code fell back to the 404 slug → 0 results (user reported
+    # "GLS found only on Bytbil, nothing from AS24"). Group ids verified live
+    # against autoscout24 taxonomy.modelGroups[47]. ma47 = Mercedes-Benz makeId.
+    ("mercedes-benz", "gls"): "ma47gr100122",
+    ("mercedes-benz", "gls 63"): "ma47gr100122",
+    ("mercedes-benz", "gls 350"): "ma47gr100122",
+    ("mercedes-benz", "gls 400"): "ma47gr100122",
+    ("mercedes-benz", "glb"): "ma47gr100149",
+    ("mercedes-benz", "glk"): "ma47gr100083",
+    ("mercedes-benz", "glk-klasse"): "ma47gr100083",
+    ("mercedes-benz", "gl"): "ma47gr100063",
+    ("mercedes-benz", "gl-klasse"): "ma47gr100063",
 }
 
 
