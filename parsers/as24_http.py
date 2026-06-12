@@ -184,7 +184,15 @@ def build_as24_url(params: dict, page_num: int = 1) -> str:
     #   3. AS24_MODEL_SLUG → path-based URL, the original fallback.
     # We try each in order and emit the cat-URL as soon as we get a hit.
     from .as24_taxonomy import resolve_cat as _resolve_cat_db
-    model_cat = _resolve_cat_db(brand, model) or AS24_MODEL_CAT.get((brand, model))
+    # Also try a "-class"/"-klasse"-stripped model name against the hardcoded cat
+    # map, so "GLS-Class"/"GLS-Klasse" (how the chat sometimes names it) resolves
+    # to the same cat as bare "gls" instead of falling through to the 404 slug.
+    model_base = re.sub(r'[\s-]?(class|klasse)$', '', model).strip(' -')
+    model_cat = (
+        _resolve_cat_db(brand, model)
+        or AS24_MODEL_CAT.get((brand, model))
+        or (AS24_MODEL_CAT.get((brand, model_base)) if model_base != model else None)
+    )
     model_slug = AS24_MODEL_SLUG.get((brand, model)) or re.sub(r'\s+', '-', model).strip('-')
 
     if brand and model_cat:
