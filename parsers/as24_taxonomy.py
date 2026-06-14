@@ -188,12 +188,31 @@ def resolve_cat(brand: str, model: str) -> Optional[str]:
         if label and label not in candidates:
             candidates.append(label)
 
-    _add(model_norm)
-    _add(_GROUP_ALIASES.get((brand_slug, model_norm)))
+    def _add_variants(label: str):
+        """Add a label + its alias + space-collapsed form."""
+        _add(label)
+        _add(_GROUP_ALIASES.get((brand_slug, label)))
+        collapsed = label.replace(" ", "").replace("-", "")
+        if collapsed != label:
+            _add(collapsed)
+
+    _add_variants(model_norm)
     stripped = _strip_body_suffix(model_norm)
     if stripped != model_norm:
-        _add(stripped)
-        _add(_GROUP_ALIASES.get((brand_slug, stripped)))
+        _add_variants(stripped)
+
+    # Robustness against trim / spec / make-prefix noise the AI sometimes tacks on
+    # ("SQ5 TDI Competition", "Audi SQ5", "S Q5"). The taxonomy stores only base
+    # group labels ("sq5"), so progressively drop trailing tokens and an optional
+    # leading make token, trying each shorter prefix. Longest-first → first real
+    # group match wins (so "model 3 performance" still resolves to "model 3", not "model").
+    tokens = model_norm.split()
+    make_first = brand_slug.split("-")[0]  # "audi", "mercedes"
+    if len(tokens) > 1 and tokens[0] == make_first:
+        _add_variants(" ".join(tokens[1:]))
+        tokens = tokens[1:]
+    for i in range(len(tokens) - 1, 0, -1):
+        _add_variants(" ".join(tokens[:i]))
 
     for cand in candidates:
         group_id = _GROUPS.get((brand_slug, cand))
