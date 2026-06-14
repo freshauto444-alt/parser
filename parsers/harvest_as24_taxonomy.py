@@ -309,6 +309,11 @@ async def harvest_group_motors(
 # ── Orchestration ─────────────────────────────────────────────────────────────
 async def run_phase1(brand_filter: Optional[str] = None) -> None:
     supabase = supabase_client()
+    # Snapshot existing groups so a scheduled re-harvest can report what it
+    # actually FILLED — the whole point of T7 is closing missing/stale groups
+    # (a missing GLS/GLB group silently returned 0 from AS24), so surface it.
+    before = {(g["brand_slug"], int(g["group_id"])) for g in _read_all(supabase, "as24_groups")}
+
     sem = asyncio.Semaphore(PHASE1_CONCURRENCY)
     async with httpx.AsyncClient(headers=HEADERS, http2=False) as client:
         brands = await discover_brands(client)
@@ -327,7 +332,23 @@ async def run_phase1(brand_filter: Optional[str] = None) -> None:
 
     ok_brands = sum(1 for r in results if isinstance(r, tuple) and r[0])
     total_groups = sum(r[1] for r in results if isinstance(r, tuple))
-    logger.info(f"Phase 1 done: {ok_brands}/{len(results)} brands, {total_groups} groups upserted")
+    failed = sum(1 for r in results if isinstance(r, Exception))
+    logger.info(f"Phase 1 done: {ok_brands}/{len(results)} brands, {total_groups} groups upserted, {failed} failures")
+
+    # Diff: report newly-added groups (brand → labels) so a cron run is auditable.
+    after_rows = _read_all(supabase, "as24_groups")
+    after = {(g["brand_slug"], int(g["group_id"])) for g in after_rows}
+    new_keys = after - before
+    if new_keys:
+        label_by_key = {(g["brand_slug"], int(g["group_id"])): g.get("label") for g in after_rows}
+        by_brand: dict[str, list[str]] = {}
+        for slug, gid in sorted(new_keys):
+            by_brand.setdefault(slug, []).append(str(label_by_key.get((slug, gid)) or gid))
+        logger.info(f"Phase 1: +{len(new_keys)} NEW groups across {len(by_brand)} brands")
+        for slug, labels in list(by_brand.items())[:20]:
+            logger.info(f"  + {slug}: {', '.join(labels[:12])}")
+    else:
+        logger.info("Phase 1: no new groups (taxonomy already complete)")
 
 
 def _read_all(supabase, table: str, page_size: int = 1000) -> list[dict]:

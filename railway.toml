@@ -8,3 +8,10 @@ startCommand = "sh -c 'uvicorn parsers.api_server:app --host 0.0.0.0 --port ${PO
 [cron]
 schedule = "0 */6 * * *"
 command = "python3 -m parsers.main hot"
+
+# Weekly AS24 taxonomy re-harvest — keeps model→cat resolution complete so
+# missing/new model groups don't silently return 0 from AS24. railway.toml holds
+# ONE [cron] per service, so add this as a SEPARATE Railway cron service (same
+# repo/image) with:
+#   schedule = "0 3 * * 1"            # Mondays 03:00 UTC
+#   command  = "python3 -m parsers.main taxonomy 1"   # phase 1 (~10min); use "all" to also refresh motors (~1h)

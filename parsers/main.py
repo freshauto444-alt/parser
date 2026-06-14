@@ -216,3 +216,17 @@ if __name__ == "__main__":
         url = sys.argv[2] if len(sys.argv) > 2 else ""
         from .parser_autoscout24 import test_one
         asyncio.run(test_one(url))
+
+    elif mode == "taxonomy":
+        # Re-harvest the AS24 taxonomy (brands+groups, optionally motors) into
+        # Supabase so model→cat resolution stays complete (a missing group → 0
+        # AS24 results, see as24_taxonomy.resolve_cat). Schedule weekly.
+        #   python3 -m parsers.main taxonomy [phase] [brand]
+        #     phase: 1 (default — brands+groups, ~10min) | 2 (motors, ~1h) | all
+        from .harvest_as24_taxonomy import run_phase1, run_phase2
+        phase = sys.argv[2] if len(sys.argv) > 2 else "1"
+        brand = sys.argv[3] if len(sys.argv) > 3 else None
+        if phase in ("1", "all"):
+            asyncio.run(run_phase1(brand))
+        if phase in ("2", "all"):
+            asyncio.run(run_phase2(brand))
