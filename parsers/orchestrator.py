@@ -50,7 +50,7 @@ async def _persist_search_results(cars: list[ParsedCar]) -> None:
 # BMW uses "3er" on AS24 but other sites need "3 series" or "320"
 # Swedish sites search by text — "BMW 3" works better than "BMW 3er"
 # Model name conversion per site.
-# AS24 uses "3er", "c-klasse" — Bytbil needs "320" or "C-Klass" — Mobile.de needs "3ER"
+# AS24 uses "3er", "c-klasse" — Bytbil needs "320" or "C-Klass".
 # Tested: Bytbil FreeText needs 2+ chars for model. Single digit "3"/"4"/"C" returns 0.
 
 # For Swedish sites (Bytbil/Blocket) — need concrete sub-model or Klass name
@@ -67,31 +67,9 @@ MODEL_SWEDISH = {
     # Others pass through (golf, v60, a6, octavia — already work)
 }
 
-# For Mobile.de API — uses uppercase model IDs
-MODEL_MOBILEDE = {
-    "1er": "1ER", "2er": "2ER", "3er": "3ER", "4er": "4ER",
-    "5er": "5ER", "6er": "6ER", "7er": "7ER", "8er": "8ER",
-    "c-klasse": "C_CLASS", "c-class": "C_CLASS",
-    "e-klasse": "E_CLASS", "e-class": "E_CLASS",
-    "s-klasse": "S_CLASS", "s-class": "S_CLASS",
-    "a-klasse": "A_CLASS", "a-class": "A_CLASS",
-    "b-klasse": "B_CLASS", "b-class": "B_CLASS",
-    "glc": "GLC", "gle": "GLE", "gls": "GLS",
-    "golf": "GOLF", "passat": "PASSAT", "tiguan": "TIGUAN",
-    "v60": "V60", "xc60": "XC60", "xc40": "XC40",
-    "a4": "A4", "a6": "A6", "q5": "Q5", "q3": "Q3",
-    "octavia": "OCTAVIA", "superb": "SUPERB",
-    "rav4": "RAV4", "corolla": "COROLLA",
-    "cayenne": "CAYENNE", "macan": "MACAN",
-}
-
 def _swedish_model(model: str) -> str:
     """Model name for Bytbil/Blocket search."""
     return MODEL_SWEDISH.get(model.lower(), model)
-
-def _mobilede_model(model: str) -> str:
-    """Model ID for Mobile.de API."""
-    return MODEL_MOBILEDE.get(model.lower(), model.upper())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -179,23 +157,6 @@ async def _blocket(params: dict, n: int) -> list[ParsedCar]:
         )
     finally:
         await ctx.close()
-
-
-async def _mobilede(params: dict, n: int) -> list[ParsedCar]:
-    from .parser_mobilede import fetch as mobilede_fetch
-    brand = params.get("brand", "")
-    model_raw = params.get("model", "")
-    md_model = _mobilede_model(model_raw)
-    return await mobilede_fetch(
-        brand=brand,
-        model_id="",
-        model_name=md_model,
-        year_from=params.get("year_from", 2018),
-        year_to=params.get("year_to"),
-        price_max=params.get("price_to"),
-        max_results=n,
-        vehicle_type=params.get("vehicle_type") or "Car",
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -345,7 +306,7 @@ def _apply_deal_bonus(cars: list[ParsedCar]) -> None:
 
 
 def deduplicate(cars: list[ParsedCar]) -> list[ParsedCar]:
-    """Cross-source dedup: same car on AS24 + Mobile.de = 1 result (keep richest). O(n)."""
+    """Cross-source dedup: same car on AS24 + Bytbil = 1 result (keep richest). O(n)."""
     seen_urls: set[str] = set()
     by_content: dict[str, ParsedCar] = {}  # content_key → best car
     no_key: list[ParsedCar] = []  # cars without mileage+price (can't dedup by content)
@@ -396,7 +357,6 @@ SOURCES = {
     "autoscout24": _as24,
     "bytbil": _bytbil,
     "blocket": _blocket,
-    # "mobilede": _mobilede,  # disabled until sandbox API is fixed
 }
 
 

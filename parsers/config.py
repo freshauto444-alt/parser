@@ -36,7 +36,6 @@ RATE_LIMITS = {
     "autoscout24.com": 30,
     "bytbil.com": 40,
     "blocket.se": 30,
-    "mobile.de": 30,
 }
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────

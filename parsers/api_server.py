@@ -48,8 +48,6 @@ def _validate_env():
         raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
 
     # Warn on optional but recommended
-    if not os.getenv("MOBILEDE_USER") or not os.getenv("MOBILEDE_PASS"):
-        logger.warning("[env] MOBILEDE_USER/MOBILEDE_PASS not set — Mobile.de search will return empty")
     if not API_KEY:
         logger.warning("[env] PARSER_API_KEY not set — API auth disabled (anyone can query)")
 

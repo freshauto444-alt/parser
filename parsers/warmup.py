@@ -4,7 +4,7 @@ DB Warmup Script — pre-populates Supabase with real car listings from all 4 si
 Run ONCE before site launch to seed the price guide and cache.
 
 Searches 50+ popular models across multiple price segments.
-Each model → parallel scrape from AS24 + Bytbil + Blocket + Mobile.de → save to DB.
+Each model → parallel scrape from AS24 + Bytbil + Blocket → save to DB.
 
 Usage:
     python -m parsers.warmup              # Full warmup (~50 models)
