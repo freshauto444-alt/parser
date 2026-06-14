@@ -147,7 +147,7 @@ AS24_MODEL_CAT = {
 }
 
 
-def build_as24_url(params: dict, page_num: int = 1) -> str:
+def build_as24_url(params: dict, page_num: int = 1, prefer_slug: bool = False) -> str:
     """Build AutoScout24 search URL using path-based format.
 
     Supports vehicle_type — AutoScout24 has separate path prefixes per type:
@@ -188,7 +188,7 @@ def build_as24_url(params: dict, page_num: int = 1) -> str:
     # map, so "GLS-Class"/"GLS-Klasse" (how the chat sometimes names it) resolves
     # to the same cat as bare "gls" instead of falling through to the 404 slug.
     model_base = re.sub(r'[\s-]?(class|klasse)$', '', model).strip(' -')
-    model_cat = (
+    model_cat = None if prefer_slug else (
         _resolve_cat_db(brand, model)
         or AS24_MODEL_CAT.get((brand, model))
         or (AS24_MODEL_CAT.get((brand, model_base)) if model_base != model else None)
@@ -451,6 +451,30 @@ async def search(
                 all_listings.append(parsed)
 
         logger.info(f"[as24] Page 1: {len(all_listings)} listings (total: {total_count})")
+
+        # ── cat→slug self-heal ────────────────────────────────────────────
+        # If the taxonomy-resolved cat= URL returned an empty page but the model
+        # has a working path slug (e.g. /audi/sq5 → 19 cars), the harvested cat
+        # was stale/wrong. Retry once via the slug before giving up — fixes the
+        # recurring "0 from AutoScout24 even though the cars exist" reports.
+        if not all_listings and "cat=" in url and (params.get("model") or ""):
+            slug_url = _build_as24_url(params, page_num=1, prefer_slug=True)
+            if slug_url != url:
+                logger.info(f"[as24] cat= returned 0 — retry via slug: {slug_url.split('autoscout24.com')[-1].split('?')[0]}")
+                if sort == "newest":
+                    slug_url = re.sub(r'sort=\w+', 'sort=age', re.sub(r'desc=\d', 'desc=1', slug_url))
+                await rate_acquire("autoscout24.com")
+                r2 = await client.get(slug_url)
+                if r2.status_code == 200 and "__NEXT_DATA__" in r2.text:
+                    nd2 = _extract_next_data(r2.text)
+                    pp2 = (nd2 or {}).get("props", {}).get("pageProps", {})
+                    slug_listings = [parse_listing_from_nextdata(raw) for raw in pp2.get("listings", [])]
+                    slug_listings = [p for p in slug_listings if p.get("make")]
+                    if slug_listings:
+                        all_listings = slug_listings
+                        total_count = pp2.get("numberOfResults", len(slug_listings))
+                        url = slug_url  # use slug for pages 2+ too
+                        logger.info(f"[as24] slug fallback recovered {len(all_listings)} listings (total: {total_count})")
 
         # ── Pages 2+: fetch in parallel with staggered delays ─────────────
         if pages_to_fetch > 1 and len(all_listings) < max_results:
