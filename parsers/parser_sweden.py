@@ -241,6 +241,24 @@ def _apply_blocket_spec(car: ParsedCar, spec: dict, equipment: list) -> None:
         car.features_other = feats["other"]
 
 
+def _blocket_description(html: str) -> Optional[str]:
+    """Seller free-text from the detail page. The bundled CarAd selector is stale
+    (returns nothing); the text lives in a <section> under an <h2> 'Beskrivning'."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        for h in soup.find_all(["h2", "h3"]):
+            if "beskrivning" in h.get_text(strip=True).lower():
+                sec = h.find_parent("section") or h.parent
+                if not sec:
+                    return None
+                txt = re.sub(r"(?i)^beskrivning\s*", "", sec.get_text("\n", strip=True)).strip()
+                return txt[:4000] if len(txt) >= 15 else None  # skip "-"/placeholder junk
+    except Exception:
+        pass
+    return None
+
+
 async def _blocket_enrich(cars: list[ParsedCar], client: httpx.AsyncClient, budget_s: float = 6.0) -> None:
     """Best-effort detail enrichment: fetch /mobility/item/{id} per car and merge
     body/color/seats/drive/hp/engine_cc/VIN/features via the bundled CarAd parser.
@@ -274,6 +292,8 @@ async def _blocket_enrich(cars: list[ParsedCar], client: httpx.AsyncClient, budg
                     urls = [f"https://images.blocketcdn.se/dynamic/1280w/item/{car.external_id}/{u}" for u in uuids]
                     car.image = urls[0]
                     car.gallery = urls[1:]
+                if desc := _blocket_description(resp.text):
+                    car.description = desc
             except Exception as e:
                 logger.debug(f"[blocket:detail] {car.external_id}: {e}")
 
