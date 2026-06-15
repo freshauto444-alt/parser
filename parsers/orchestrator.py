@@ -98,65 +98,28 @@ async def _bytbil(params: dict, n: int) -> list[ParsedCar]:
 
 
 async def _blocket(params: dict, n: int) -> list[ParsedCar]:
+    # Blocket migrated to a "/mobility" JSON search API that returns rich,
+    # structured docs[] per car AND honours every filter server-side. The old
+    # Playwright-list + httpx-ld+json-detail path targeted the pre-migration
+    # Next.js site → it returned 0 for body/color/hp/drive and ignored
+    # fuel/body/transmission filters. parse_blocket_api replaces both.
     rate = await get_sek_to_eur()
-    model = _swedish_model(params.get("model", ""))
-    brand = params.get("brand", "")
-    body_type = params.get("body_type")
-    fuel = params.get("fuel")
-
-    # Fast path: blocket-api (HTTP only). Limited to brand-only queries because
-    # the API returns minimal fields (price/url/id/image only) — no body_type/fuel,
-    # so we can't satisfy strict filters on those.
-    if brand and not body_type and not fuel:
-        try:
-            from blocket import search_car
-            from .base import normalize_make, normalize_model, calc_score
-            results = await asyncio.to_thread(
-                search_car,
-                query=f"{brand} {model}".strip(),
-                price_from=int((params.get("price_from") or 20000) / rate),
-            )
-            cars = []
-            for item in (results or [])[:n]:
-                price_sek = item.get("price", 0)
-                car = ParsedCar(
-                    source_site="blocket.se",
-                    source_url=item.get("url", ""),
-                    external_id=str(item.get("id", "")),
-                    make=normalize_make(params.get("brand", "")),
-                    model=normalize_model(params.get("model", ""), params.get("brand", "")),
-                    price_eur=round(price_sek * rate) if price_sek else None,
-                    price_original=price_sek, price_currency="SEK",
-                    country="Sweden",
-                    image=item.get("image") or (item.get("images", [None])[0] if item.get("images") else None),
-                )
-                car.score = calc_score(price_eur=car.price_eur, has_image=bool(car.image))
-                cars.append(car)
-            if cars:
-                return cars
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug(f"[blocket] blocket-api failed: {e}")
-
-    # Playwright path: extracts full ld+json with body_type, fuel, price etc.
-    from .parser_sweden import parse_blocket
-    from .browser_pool import BrowserPool
-    ctx = await BrowserPool.acquire(locale="sv-SE")
-    try:
-        return await parse_blocket(
-            ctx, rate,
-            brand=params.get("brand", ""), model=params.get("model", ""),
-            year_from=params.get("year_from", 2018),
-            year_to=params.get("year_to"),
-            max_results=n,
-            fuel=fuel, transmission=params.get("transmission"),
-            body_type=body_type,
-            price_to_eur=params.get("price_to"),
-            vehicle_type=params.get("vehicle_type") or "Car",
-        )
-    finally:
-        await ctx.close()
+    from .parser_sweden import parse_blocket_api
+    return await parse_blocket_api(
+        rate,
+        brand=params.get("brand", ""),
+        model=_swedish_model(params.get("model", "")),
+        year_from=params.get("year_from", 2018),
+        year_to=params.get("year_to"),
+        price_from_eur=params.get("price_from"),
+        price_to_eur=params.get("price_to"),
+        max_results=n,
+        fuel=params.get("fuel"),
+        transmission=params.get("transmission"),
+        body_type=params.get("body_type"),
+        drive=params.get("drive"),
+        vehicle_type=params.get("vehicle_type") or "Car",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -38,6 +38,238 @@ _HEADERS = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  BLOCKET.SE — "mobility" search API (the real structured endpoint)
+# ══════════════════════════════════════════════════════════════════════════════
+# Behind /mobility/search/car sits a JSON API that returns rich, structured
+# docs[] per car. The OLD path (Playwright list + httpx ld+json detail) targeted
+# Blocket's pre-migration Next.js site, so it returned 0 for body/color/hp/drive/
+# etc. and ignored fuel/body/transmission filters → wrong-class results. This API
+# fixes both: every client filter maps to a real query param (server-side), and
+# each result already carries make/model/series/spec/year/mileage/price/fuel/
+# transmission/VIN/image. Codes below are from the live `filters` facets.
+BLOCKET_SEARCH_URL = "https://www.blocket.se/mobility/search/api/search/SEARCH_ID_CAR_USED"
+
+# our canonical English body → Blocket body_type code
+_BLOCKET_BODY = {
+    "estate": "4", "sedan": "3", "suv": "9", "hatchback": "2",
+    "coupe": "6", "convertible": "7", "van": "5", "pickup": "8",
+}
+# our canonical fuel → Blocket fuel code (Hybrid → "Hybrid bensin"=6)
+_BLOCKET_FUEL = {"petrol": "1", "diesel": "2", "electric": "4", "hybrid": "6"}
+_BLOCKET_TRANS = {"automatic": "2", "manual": "1"}
+_BLOCKET_DRIVE = {"awd": "2", "fwd": "3", "rwd": "1"}  # Fyrhjuls/Fram/Bakhjuls
+
+# Blocket doc `fuel` text → our canonical
+_SE_FUEL_TEXT = {
+    "bensin": "Petrol", "diesel": "Diesel", "el": "Electric",
+    "hybrid bensin": "Hybrid", "hybrid diesel": "Hybrid",
+    "plug-in bensin": "Hybrid", "plug-in diesel": "Hybrid",
+    "fordonsgas (cng)": "Petrol", "etanol (ffv, e85)": "Petrol",
+}
+
+
+def _blocket_make_code(brand: str) -> Optional[str]:
+    """Brand name → Blocket `variant` make code (e.g. 'Audi' → '0.744').
+
+    Codes come from blocket_api's bundled CarModel enum (~144 makes). Match by
+    alphanumeric-normalized name so 'Mercedes-Benz' ↔ MERCEDES_BENZ, etc.
+    """
+    if not brand:
+        return None
+    try:
+        from blocket_api.constants import CarModel
+    except Exception:
+        return None
+    norm = re.sub(r"[^a-z0-9]", "", brand.lower())
+    if not norm:
+        return None
+    for m in CarModel:
+        if re.sub(r"[^a-z0-9]", "", m.name.lower()) == norm:
+            return m.value
+    return None
+
+
+def _blocket_spec_hp_cc(spec: str) -> tuple[Optional[int], Optional[int], Optional[str]]:
+    """Pull horsepower + engine displacement from `model_specification`.
+
+    e.g. "3.0 TDI V6 Q 272hk" → hp=272, cc=3000, engine="3.0L".
+    Conservative on displacement: only a real decimal litre figure ("2.0",
+    "3.0") counts — Audi's "45 TDI"/"55 TFSI" trim numbers have no decimal and
+    are correctly ignored.
+    """
+    hp = cc = None
+    engine = None
+    if not spec:
+        return hp, cc, engine
+    m = re.search(r"(\d{2,4})\s*hk", spec, re.IGNORECASE)
+    if m:
+        v = int(m.group(1))
+        if 30 <= v <= 1500:
+            hp = v
+    m2 = re.search(r"\b(\d\.\d)\b", spec)
+    if m2:
+        liters = float(m2.group(1))
+        if 0.6 <= liters <= 8.0:
+            cc = int(round(liters * 1000))
+            engine = f"{liters}L"
+    return hp, cc, engine
+
+
+def _blocket_doc_to_car(
+    it: dict, rate: float,
+    body_en: Optional[str], body_ua: Optional[str], drive: Optional[str],
+) -> Optional[ParsedCar]:
+    try:
+        make = normalize_make(it.get("make") or "")
+        if not make:
+            return None
+        model_name = normalize_model(it.get("model") or it.get("heading") or "", make)
+
+        price_sek = (it.get("price") or {}).get("amount")
+        price_eur = round(price_sek * rate) if price_sek else None
+
+        mileage = it.get("mileage")
+        if mileage is not None:
+            mileage = int(mileage)
+            if str(it.get("mileage_unit", "")).upper() == "SCANDINAVIAN_MILE":
+                mileage *= 10  # Swedish "mil" → km
+
+        fuel_txt = (it.get("fuel") or "").strip()
+        fuel_en = _SE_FUEL_TEXT.get(fuel_txt.lower()) or normalize_fuel(fuel_txt)
+
+        spec = it.get("model_specification") or ""
+        hp, cc, engine = _blocket_spec_hp_cc(spec)
+
+        img = (it.get("image") or {}).get("url")
+        url = it.get("canonical_url") or f"https://www.blocket.se/mobility/item/{it.get('id', '')}"
+        seg = it.get("dealer_segment")
+        seller = "dealer" if seg == "Företag" else "private" if seg == "Privat" else None
+
+        car = ParsedCar(
+            source_site="blocket.se",
+            source_url=url,
+            external_id=str(it.get("id") or it.get("ad_id") or ""),
+            make=make, model=model_name,
+            year=it.get("year"),
+            price_eur=price_eur, price_original=price_sek, price_currency="SEK",
+            mileage_km=mileage,
+            fuel=fuel_en, fuel_ua=FUEL_UA.get(fuel_en or "", None),
+            transmission=normalize_transmission(it.get("transmission") or ""),
+            horsepower=hp, engine=engine, engine_cc=cc,
+            drive=normalize_drive(drive) if drive else None,
+            body_type=body_en, body_type_ua=body_ua,
+            image=img,
+            location=it.get("location"),
+            country="Sweden",
+            vin=(it.get("chassis_number") or None),
+            title_line=spec or it.get("heading"),
+            dealer_name=it.get("organisation_name"),
+            seller_type=seller,
+            vehicle_type="Car",
+        )
+        car.score = calc_score(
+            year=car.year, mileage=car.mileage_km, price_eur=car.price_eur,
+            has_image=bool(car.image), hp=car.horsepower,
+            has_color=bool(car.color), has_drive=bool(car.drive),
+            has_body_type=bool(car.body_type), seller_type=car.seller_type,
+        )
+        return car
+    except Exception as e:
+        logger.debug(f"[blocket:api] doc parse: {e}")
+        return None
+
+
+async def parse_blocket_api(
+    rate: float, *,
+    brand: str = "", model: str = "",
+    year_from: int = 2018, year_to: Optional[int] = None,
+    price_from_eur: Optional[int] = None, price_to_eur: Optional[int] = None,
+    max_results: int = 30,
+    fuel: Optional[str] = None, transmission: Optional[str] = None,
+    body_type: Optional[str] = None, drive: Optional[str] = None,
+    vehicle_type: str = "Car",
+) -> list[ParsedCar]:
+    """Blocket via its structured search API. Pure HTTP (no Playwright).
+
+    Brand → exact `variant` make code (precise); model → free-text `q` (model
+    codes need the taxonomy harvest, a later step). body/fuel/transmission/
+    wheel_drive/price/year all map to server-side params, so results are already
+    relevant; body & drive are tagged from the query (every result matches it).
+    """
+    base_params: list[tuple[str, object]] = []
+    make_code = _blocket_make_code(brand)
+    if make_code:
+        base_params.append(("variant", make_code))
+        if model:
+            base_params.append(("q", model))
+    else:
+        q = f"{brand} {model}".strip()
+        if q:
+            base_params.append(("q", q))
+
+    if year_from:
+        base_params.append(("year_from", year_from))
+    if year_to:
+        base_params.append(("year_to", year_to))
+    if price_from_eur and rate > 0:
+        base_params.append(("price_from", int(round(price_from_eur / rate))))
+    if price_to_eur and rate > 0:
+        base_params.append(("price_to", int(round(price_to_eur / rate))))
+
+    if body_type and (bc := _BLOCKET_BODY.get(body_type.strip().lower())):
+        base_params.append(("body_type", bc))
+    if fuel and (fc := _BLOCKET_FUEL.get(fuel.strip().lower())):
+        base_params.append(("fuel", fc))
+    if transmission and (tc := _BLOCKET_TRANS.get(transmission.strip().lower())):
+        base_params.append(("transmission", tc))
+    if drive and (dc := _BLOCKET_DRIVE.get(drive.strip().lower())):
+        base_params.append(("wheel_drive", dc))
+
+    # We filtered by body server-side → safe to tag every result with it.
+    body_en, body_ua = normalize_body_type(body_type) if body_type else (None, None)
+
+    cars: list[ParsedCar] = []
+    seen: set[str] = set()
+    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True) as client:
+        page = 1
+        while len(cars) < max_results and page <= 10:
+            try:
+                resp = await client.get(
+                    BLOCKET_SEARCH_URL, params=base_params + [("page", page)], timeout=15,
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"[blocket:api] HTTP {resp.status_code} page {page}")
+                    break
+                data = resp.json()
+            except Exception as e:
+                logger.warning(f"[blocket:api] page {page}: {e}")
+                break
+
+            docs = data.get("docs") or []
+            if not docs:
+                break
+            for it in docs:
+                ext = str(it.get("id") or it.get("ad_id") or "")
+                if ext and ext in seen:
+                    continue
+                car = _blocket_doc_to_car(it, rate, body_en, body_ua, drive)
+                if car:
+                    seen.add(ext)
+                    cars.append(car)
+                if len(cars) >= max_results:
+                    break
+
+            paging = (data.get("metadata") or {}).get("paging") or {}
+            last = paging.get("last") or page
+            if page >= last:
+                break
+            page += 1
+
+    logger.info(f"[blocket:api] {brand} {model}: {len(cars)} cars")
+    return cars[:max_results]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  BYTBIL.COM — fully HTTP
 # ══════════════════════════════════════════════════════════════════════════════
 
