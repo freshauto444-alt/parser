@@ -59,6 +59,18 @@ _BLOCKET_FUEL = {"petrol": "1", "diesel": "2", "electric": "4", "hybrid": "6"}
 _BLOCKET_TRANS = {"automatic": "2", "manual": "1"}
 _BLOCKET_DRIVE = {"awd": "2", "fwd": "3", "rwd": "1"}  # Fyrhjuls/Fram/Bakhjuls
 
+# Minimal headers for the JSON API. Crucially NO brotli in Accept-Encoding:
+# httpx can't transparently decode `br` unless the brotli package is installed,
+# and the shared _HEADERS requests it → the API replies brotli → resp.json()
+# chokes on raw bytes ("utf-8 codec can't decode 0x90"). gzip/deflate only is
+# safe everywhere. (The bundled blocket_api works for the same reason — UA only.)
+_BLOCKET_API_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "sv-SE,sv;q=0.9,en;q=0.8",
+}
+
 # Blocket doc `fuel` text → our canonical
 _SE_FUEL_TEXT = {
     "bensin": "Petrol", "diesel": "Diesel", "el": "Electric",
@@ -230,7 +242,7 @@ async def parse_blocket_api(
 
     cars: list[ParsedCar] = []
     seen: set[str] = set()
-    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True) as client:
+    async with httpx.AsyncClient(headers=_BLOCKET_API_HEADERS, follow_redirects=True) as client:
         page = 1
         while len(cars) < max_results and page <= 10:
             try:
