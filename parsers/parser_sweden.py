@@ -263,6 +263,17 @@ async def _blocket_enrich(cars: list[ParsedCar], client: httpx.AsyncClient, budg
                     return
                 d = CarAd(int(car.external_id)).parse(resp)  # sync BeautifulSoup parse
                 _apply_blocket_spec(car, d.get("specifications", {}) or {}, d.get("equipment", []) or [])
+                # Gallery: the search doc gives ONE photo; the detail page carries
+                # all of them. Pull this item's image UUIDs (1280w = smallest valid
+                # CDN preset; 1024w 404s) → image + gallery.
+                uuids = list(dict.fromkeys(re.findall(
+                    rf'images\.blocketcdn\.se/dynamic/[^/"]+/item/{car.external_id}/([0-9a-f-]{{36}})',
+                    resp.text,
+                )))[:20]
+                if uuids:
+                    urls = [f"https://images.blocketcdn.se/dynamic/1280w/item/{car.external_id}/{u}" for u in uuids]
+                    car.image = urls[0]
+                    car.gallery = urls[1:]
             except Exception as e:
                 logger.debug(f"[blocket:detail] {car.external_id}: {e}")
 
