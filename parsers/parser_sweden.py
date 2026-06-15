@@ -191,6 +191,88 @@ def _blocket_doc_to_car(
         return None
 
 
+_SE_DRIVE_TEXT = {"fyrhjulsdrift": "AWD", "framhjulsdrift": "FWD", "bakhjulsdrift": "RWD"}
+
+
+def _parse_motorvolym(s: str) -> Optional[int]:
+    """Blocket 'Motorvolym' → engine_cc. '2 L'/'2.0 L'→2000, '1968 cm³'→1968."""
+    t = str(s).lower()
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*l\b", t)
+    if m:
+        cc = int(round(float(m.group(1).replace(",", ".")) * 1000))
+        return cc if 600 <= cc <= 8500 else None
+    m = re.search(r"(\d{3,5})\s*cm", t)
+    if m:
+        cc = int(m.group(1))
+        return cc if 600 <= cc <= 8500 else None
+    return None
+
+
+def _apply_blocket_spec(car: ParsedCar, spec: dict, equipment: list) -> None:
+    """Merge a CarAd `specifications` dict + equipment into a ParsedCar (detail
+    enrichment). Real per-car values OVERRIDE the query-tagged body/drive."""
+    if bt := spec.get("Biltyp"):
+        en, ua = normalize_body_type(bt)
+        if en:
+            car.body_type, car.body_type_ua = en, ua
+    if col := (spec.get("Färg") or spec.get("Färgbeskrivning")):
+        en, ua = normalize_color(col)
+        if en:
+            car.color, car.color_ua = en, ua
+    if (s := spec.get("Säten")) and str(s).strip().isdigit():
+        car.seats = int(str(s).strip())
+    if dh := spec.get("Drivhjul"):
+        car.drive = _SE_DRIVE_TEXT.get(str(dh).strip().lower()) or car.drive
+    if eff := spec.get("Effekt"):  # "190 Hk"
+        m = re.search(r"(\d+)", str(eff))
+        if m and 30 <= int(m.group(1)) <= 1500:
+            car.horsepower = int(m.group(1))
+    if (mv := spec.get("Motorvolym")) and not car.engine_cc:
+        cc = _parse_motorvolym(mv)
+        if cc:
+            car.engine_cc = cc
+    if (vin := spec.get("Chassinummer")) and not car.vin:
+        car.vin = str(vin).upper()
+    if equipment:
+        feats = translate_and_categorize_features(equipment)
+        car.safety_features = feats["safety"]
+        car.comfort_features = feats["comfort"]
+        car.infotainment = feats["infotainment"]
+        car.features_other = feats["other"]
+
+
+async def _blocket_enrich(cars: list[ParsedCar], client: httpx.AsyncClient, budget_s: float = 6.0) -> None:
+    """Best-effort detail enrichment: fetch /mobility/item/{id} per car and merge
+    body/color/seats/drive/hp/engine_cc/VIN/features via the bundled CarAd parser.
+    Bounded (sem) + time-boxed — cars not enriched in time keep their search
+    fields. Never raises, never drops cars."""
+    from blocket_api.ad_parser import CarAd
+    targets = [c for c in cars if (c.external_id or "").isdigit()]
+    if not targets:
+        return
+    sem = asyncio.Semaphore(8)
+
+    async def one(car: ParsedCar) -> None:
+        async with sem:
+            try:
+                resp = await client.get(
+                    f"https://www.blocket.se/mobility/item/{car.external_id}",
+                    headers={"Accept": "text/html"}, timeout=8,
+                )
+                if resp.status_code != 200:
+                    return
+                d = CarAd(int(car.external_id)).parse(resp)  # sync BeautifulSoup parse
+                _apply_blocket_spec(car, d.get("specifications", {}) or {}, d.get("equipment", []) or [])
+            except Exception as e:
+                logger.debug(f"[blocket:detail] {car.external_id}: {e}")
+
+    tasks = [asyncio.create_task(one(c)) for c in targets]
+    done, pending = await asyncio.wait(tasks, timeout=budget_s)
+    for t in pending:
+        t.cancel()
+    logger.info(f"[blocket:api] enriched {len(done)}/{len(targets)} via detail (budget {budget_s}s)")
+
+
 async def parse_blocket_api(
     rate: float, *,
     brand: str = "", model: str = "",
@@ -236,6 +318,9 @@ async def parse_blocket_api(
         base_params.append(("transmission", tc))
     if drive and (dc := _BLOCKET_DRIVE.get(drive.strip().lower())):
         base_params.append(("wheel_drive", dc))
+    # Only USED cars for sale (sales_form 1) — drops leasing (5) and new-car (2)
+    # listings whose monthly/config prices leaked in as junk (e.g. "2027, €704").
+    base_params.append(("sales_form", "1"))
 
     # We filtered by body server-side → safe to tag every result with it.
     body_en, body_ua = normalize_body_type(body_type) if body_type else (None, None)
@@ -276,6 +361,12 @@ async def parse_blocket_api(
             if page >= last:
                 break
             page += 1
+
+        # Detail enrichment (best-effort, time-boxed, reuses the open client):
+        # fills body/color/seats/drive/hp/engine_cc/VIN/features the search docs
+        # lack. Capped to the cars we'll surface to bound bandwidth/latency.
+        if cars:
+            await _blocket_enrich(cars[:max_results], client)
 
     logger.info(f"[blocket:api] {brand} {model}: {len(cars)} cars")
     return cars[:max_results]
