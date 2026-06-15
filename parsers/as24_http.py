@@ -316,11 +316,14 @@ def parse_listing_from_nextdata(listing: dict) -> dict:
 
     # Engine displacement
     engine = None
+    engine_cc = None
     disp_str = vehicle.get("engineDisplacementInCCM", "")
     if disp_str:
         disp_digits = re.sub(r'[^\d]', '', str(disp_str))
         if disp_digits:
             cc = int(disp_digits)
+            if 600 <= cc <= 8500:  # sane car/SUV range; guards garbage values
+                engine_cc = cc
             liters = round(cc / 1000, 1)
             fuel_short = fuel or ""
             engine = f"{liters} {fuel_short}".strip() if fuel_short else f"{liters}L"
@@ -361,6 +364,7 @@ def parse_listing_from_nextdata(listing: dict) -> dict:
         "transmission": transmission,
         "horsepower": hp,
         "engine": engine,
+        "engine_cc": engine_cc,
         "country": country,
         "city": location.get("city", ""),
         "images": images,

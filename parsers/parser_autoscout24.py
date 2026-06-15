@@ -127,6 +127,7 @@ async def parse_http(params: dict, max_results: int = 20) -> list[ParsedCar]:
                 transmission=transmission,
                 horsepower=d.get("horsepower"),
                 engine=d.get("engine"),
+                engine_cc=d.get("engine_cc"),
                 body_type=body_type, body_type_ua=body_type_ua,
                 country=d.get("country", "Europe"),
                 location=d.get("city", ""),
@@ -624,6 +625,8 @@ async def fetch_details(url: str, client: httpx.AsyncClient) -> dict:
             displacement_l = round(displacement_cc / 1000, 1)
             fuel_short = result.get("fuel") or ""
             result["engine"] = f"{displacement_l} {fuel_short}".strip() if fuel_short else f"{displacement_l}L"
+            if 600 <= int(displacement_cc) <= 8500:  # numeric cc for the displacement filter (cars)
+                result["engine_cc"] = int(displacement_cc)
         else:
             # Fallback: extract displacement from model description (e.g. "320d" → "2.0 Diesel")
             model_desc = vehicle.get("modelVersionInput", "") or listing.get("title", "")
@@ -1178,6 +1181,7 @@ async def parse(
                         body_type=d.get("body_type"),
                         body_type_ua=d.get("body_type_ua"),
                         engine=d.get("engine"),
+                        engine_cc=d.get("engine_cc"),
                         color=d.get("color"),
                         color_ua=d.get("color_ua"),
                         doors=d.get("doors"),
