@@ -130,6 +130,8 @@ def _build_update(car: ParsedCar, expires_at: str) -> dict:
     _set_if_present(data, "transmission", car.transmission)
     _set_if_present(data, "horsepower", car.horsepower)
     _set_if_present(data, "engine", car.engine)
+    _set_if_present(data, "engine_cc", car.engine_cc)
+    _set_if_present(data, "vin", car.vin)
     _set_if_present(data, "image", car.image)
 
     # Drive, body, color — оновлюємо якщо не "Unknown"

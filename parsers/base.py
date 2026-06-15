@@ -1467,7 +1467,8 @@ def build_db_row(
         "country": car.country,
         "country_ua": COUNTRY_UA.get(car.country, car.country),
         "plate_type": "EU",
-        "vin": None,
+        "vin": car.vin,
+        "engine_cc": car.engine_cc,
         "history": [],
         "client_order_id": client_order_id,
     }
