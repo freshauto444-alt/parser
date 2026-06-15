@@ -165,6 +165,13 @@ def build_as24_url(params: dict, page_num: int = 1, prefer_slug: bool = False) -
     brand_raw = (params.get("brand") or "").lower()
     brand = re.sub(r"\s+", "-", brand_raw).strip("-")
     model = (params.get("model") or "").lower()
+    # Porsche renamed Cayman/Boxster to "718 Cayman/Boxster" (2016+), but AS24's
+    # slug + taxonomy still use bare "cayman"/"boxster"/"spyder" — the "718 "
+    # prefix 404s (/lst/porsche/718-cayman). Strip it; keep bare "718" (valid group).
+    if brand == "porsche":
+        stripped = re.sub(r"^718[\s-]+", "", model).strip()
+        if stripped and stripped != "718":
+            model = stripped
     vtype = (params.get("vehicle_type") or "Car")
     # Path prefix per vehicle_type
     vtype_path = {
