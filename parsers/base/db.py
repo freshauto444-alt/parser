@@ -1,8 +1,10 @@
 # parsers/base/db.py — build_db_row (ParsedCar -> DB dict). From base.py.
 
+import uuid as uuid_lib
 from datetime import datetime, timezone
 from typing import Optional
 
+from .constants import BODY_UA, FUEL_UA
 from .model import ParsedCar
 from .categorize import deduplicate_gallery
 

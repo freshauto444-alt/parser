@@ -3,6 +3,7 @@
 from typing import Optional
 
 from .constants import SV_FEATURES
+from .helpers import decode_html
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FEATURE TRANSLATION
