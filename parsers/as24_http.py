@@ -97,14 +97,13 @@ AS24_MODEL_SLUG = {
     ("bmw", "m5"): "5er", ("bmw", "m6"): "6er", ("bmw", "m8"): "8er",
     ("bmw", "x3 m"): "x3", ("bmw", "x4 m"): "x4",
     ("bmw", "x5 m"): "x5", ("bmw", "x6 m"): "x6",
-    # Audi RS / S
-    ("audi", "rs3"): "a3", ("audi", "rs4"): "a4", ("audi", "rs5"): "a5",
-    ("audi", "rs6"): "a6", ("audi", "rs7"): "a7",
-    ("audi", "rs q3"): "q3", ("audi", "rs q8"): "q8",
-    ("audi", "s3"): "a3", ("audi", "s4"): "a4", ("audi", "s5"): "a5",
-    ("audi", "s6"): "a6", ("audi", "s7"): "a7", ("audi", "s8"): "a8",
-    # VW Golf R / GTI map to base "golf"
-    ("volkswagen", "golf r"): "golf", ("volkswagen", "golf gti"): "golf",
+    # NOTE: performance trims (Audi RS6/S4, VW Golf GTI/R/GTD) used to be collapsed
+    # to the base model here — that was WRONG: AS24 has working trim slugs
+    # (/audi/rs6, /volkswagen/golf-gti, …) that return only the trim (hundreds-
+    # thousands of cars). Collapsing them to /a6 or /golf threw the trim away. We
+    # now let the default slugifier produce "golf-gti"/"rs6", and search() falls
+    # back to the base model only if the trim slug 404s (e.g. /hyundai/i30-n —
+    # AS24 doesn't break that one out). Mercedes AMG variants use cat=…mt below.
 }
 
 # AS24 uses a `cat=ma{brand}gr{group}mt{trim}` query param to filter to a
@@ -444,6 +443,20 @@ async def search(
                        error=f"challenge page {len(resp.text)}B")
         except Exception:
             pass  # metrics must never break scrapes
+
+        # Trim-slug 404 fallback: AS24 doesn't break out every performance trim
+        # (/hyundai/i30-n, /bmw/m340i, /mercedes-benz/c63-amg all 404). Retry once
+        # with the base model (drop the last token) so we return base-model cars
+        # instead of zero, e.g. "i30 n" → "i30". (Trims AS24 DOES break out — Golf
+        # GTI, Audi RS6 — resolve on the first try and never reach here.)
+        if resp.status_code == 404 and " " in (params.get("model") or "").strip():
+            base = (params.get("model") or "").strip().rsplit(" ", 1)[0]
+            base_url = _build_as24_url({**params, "model": base}, page_num=1, prefer_slug=True)
+            if base_url != page1_url:
+                logger.info(f"[as24] trim slug 404 — retry base model {base!r}")
+                await rate_acquire("autoscout24.com")
+                resp = await client.get(base_url)
+                page1_url = url = base_url
 
         if resp.status_code != 200:
             logger.warning(f"[as24] Page 1 HTTP {resp.status_code}" + (" (challenge?)" if resp.status_code in (403, 429) else ""))
