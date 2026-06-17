@@ -421,7 +421,7 @@ async def parse_bytbil(
 
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True) as client:
         # ── Fetch list pages (paginate until enough URLs or no new ones) ──
-        from .rate_limiter import acquire as _rl
+        from ..rate_limiter import acquire as _rl
         # Determine how many pages to fetch — 1 page yields ~24 URLs.
         pages_to_fetch = max(1, (max_results + 23) // 24)
         pages_to_fetch = min(pages_to_fetch, 3)  # safety cap
@@ -575,7 +575,7 @@ async def parse_bytbil(
                     description=d.get("description"),
                     title_line=d.get("title"),
                 )
-                from .base import count_premium_features
+                from ..base import count_premium_features
                 premium = count_premium_features(car.safety_features, car.comfort_features, car.infotainment, car.features_other)
                 car.score = calc_score(
                     year=car.year, mileage=car.mileage_km,

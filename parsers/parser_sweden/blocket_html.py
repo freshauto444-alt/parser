@@ -594,7 +594,7 @@ async def parse_blocket(
                         description=d.get("description"),
                         title_line=d.get("title"),
                     )
-                    from .base import count_premium_features
+                    from ..base import count_premium_features
                     premium = count_premium_features(car.safety_features, car.comfort_features, car.infotainment, car.features_other)
                     car.score = calc_score(
                         year=car.year, mileage=car.mileage_km,
