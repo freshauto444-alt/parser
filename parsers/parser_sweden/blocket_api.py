@@ -201,16 +201,21 @@ def _apply_blocket_spec(car: ParsedCar, spec: dict, equipment: list) -> None:
             car.color, car.color_ua = en, ua
     if (s := spec.get("Säten")) and str(s).strip().isdigit():
         car.seats = int(str(s).strip())
+    if (dr := spec.get("Antal dörrar")) and str(dr).strip().isdigit():
+        car.doors = int(str(dr).strip())
     if dh := spec.get("Drivhjul"):
         car.drive = _SE_DRIVE_TEXT.get(str(dh).strip().lower()) or car.drive
     if eff := spec.get("Effekt"):  # "190 Hk"
         m = re.search(r"(\d+)", str(eff))
         if m and 30 <= int(m.group(1)) <= 1500:
             car.horsepower = int(m.group(1))
-    if (mv := spec.get("Motorvolym")) and not car.engine_cc:
+    if mv := spec.get("Motorvolym"):  # "2 L" → cc + text label
         cc = _parse_motorvolym(mv)
         if cc:
-            car.engine_cc = cc
+            if not car.engine_cc:
+                car.engine_cc = cc
+            if not car.engine:  # Blocket has no engine text field; derive from cc
+                car.engine = f"{cc / 1000:.1f}L"
     if (vin := spec.get("Chassinummer")) and not car.vin:
         car.vin = str(vin).upper()
     if equipment:

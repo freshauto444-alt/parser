@@ -232,6 +232,8 @@ async def _enrich_top_results(cars: list[ParsedCar], count: int):
                         # Sales/listing
                         "description", "title_line", "first_registration",
                         "video_url", "listing_updated_at",
+                        # Interior — upholstery / seat material (extracted but was dropped)
+                        "seat_material", "seat_material_ua",
                         # Also copy features_other in case detail has more
                     ):
                         v = d.get(qkey)

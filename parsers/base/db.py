@@ -94,6 +94,7 @@ def build_db_row(
         "plate_type": "EU",
         "vin": car.vin,
         "engine_cc": car.engine_cc,
+        "description": car.description,
         "history": [],
         "client_order_id": client_order_id,
     }

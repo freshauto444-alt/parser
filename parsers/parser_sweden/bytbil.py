@@ -177,8 +177,15 @@ def _parse_bytbil_detail(html: str, url: str) -> dict:
     if em_val:
         result["emission_class"] = em_val.strip()
 
-    # Description — Bytbil usually has a <div class="description"> or similar.
-    desc_m = re.search(r'<div[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
+    # Description — the seller text lives in a <div class="...vehicle-detail-
+    # equipment-detail..." style="...white-space:pre-line;">. NOTE: that class is
+    # also used for the EQUIPMENT list; the description is the one carrying
+    # `white-space:pre-line`, so require both markers (a bare `description` class
+    # match grabs a "similar cars" card instead → junk).
+    desc_m = re.search(
+        r'<div[^>]*vehicle-detail-equipment-detail[^>]*white-space:\s*pre-line[^>]*>(.*?)</div>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
     if desc_m:
         d = decode_html(re.sub(r'<[^>]+>', ' ', desc_m.group(1))).strip()
         d = re.sub(r'\s+', ' ', d)
