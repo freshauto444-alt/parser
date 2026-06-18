@@ -11,7 +11,7 @@ import re
 import sys
 
 _PERF_TRIMS = {"gti", "gtd", "amg", "rs", "gts", "competition", "jcw",
-               "cupra", "abarth", "quadrifoglio", "m", "n", "r"}
+               "cupra", "abarth", "quadrifoglio", "m"}
 
 
 def model_matches(wanted_model: str, c_model: str) -> bool:
@@ -53,8 +53,11 @@ CASES = [
     ("Golf GTI", "Golf", False), ("Golf GTI", "Golf GTI", True),
     ("Golf GTI", "Golf-Serie", False), ("Golf GTI", "Golf Variant", False),
     ("Golf GTI", "Polo GTI", False), ("Golf GTI", "Golf GTI Performance", True),
-    ("i30 N", "i30", False), ("i30 N", "i30 N", True), ("i30 N", "i20 N", False),
-    ("Golf R", "Golf", False), ("Golf R", "Golf R", True), ("Golf R", "Golf GTI", False),
+    # Single-letter n/r are intentionally NOT gated (sources don't label them in
+    # `model` → gating would zero real trims). Base matches via the loose default;
+    # precise targeting is a source-level (model/motor code) job, not this filter.
+    ("i30 N", "i30 N", True),
+    ("Golf R", "Golf R", True),
     ("Octavia RS", "Octavia", False), ("Octavia RS", "Octavia RS", True),
     ("C 63 AMG", "C-Klass", False), ("C 63 AMG", "C 63 AMG", True),
     # Non-trim queries must still behave (no gate):

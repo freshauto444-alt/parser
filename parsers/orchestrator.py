@@ -443,12 +443,17 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
         # Exception: "3 series" must NOT match "X3" (separate SUV line) nor "330 i" etc only if first digit is 3.
         # Performance-trim tokens: when the request names one of these, a base
         # model that lacks it (plain "X5" for "X5 M", "Golf" for "Golf GTI") must
-        # NOT match — otherwise the loose substring/token-overlap below floods the
-        # result with the wrong, often over-budget, base variant (the reported bug:
-        # "X5 M" returned 47 base X5 + 1 real M). Fused trims (M3, RS6, S5) are a
-        # single token and matched normally; only STANDALONE trim tokens gate here.
+        # NOT match — the loose substring/token-overlap below otherwise floods the
+        # result with the wrong, often over-budget, base variant.
+        # ONLY tokens that sources reliably write into the `model` field belong
+        # here. Single-letter "n"/"r"/"s" are EXCLUDED: sources leave them in the
+        # spec/title, not `model` (e.g. Hyundai i30 N is stored model="I30"), so
+        # gating on them would over-filter every real trim to ZERO. "m" stays —
+        # BMW X-M cars are reliably labelled "X5 M"/"X3 M". Those un-gated trims
+        # (i30 N, Golf R, AMG sub-specs on Blocket) need the source-level model/
+        # motor codes (as24_motors / Blocket variant) to be targeted precisely.
         _PERF_TRIMS = {"gti", "gtd", "amg", "rs", "gts", "competition", "jcw",
-                       "cupra", "abarth", "quadrifoglio", "m", "n", "r"}
+                       "cupra", "abarth", "quadrifoglio", "m"}
         wanted_trims = req_tokens & _PERF_TRIMS
 
         def _model_matches(c_model: str) -> bool:
