@@ -16,6 +16,20 @@ from ..base import (
     calc_score, sek_to_eur, is_known_brand,
     translate_and_categorize_features, FUEL_UA,
 )
+from .blocket_variants import resolve_variant
+
+# Performance trims that Blocket's `variant` tree does NOT model as their own
+# node (it stops at engine level), so we can't target them precisely. When the
+# requested model names one of these, we keep free-text `q` and post-filter the
+# returned cars on the token. Word-boundary regex avoids matching e.g. the "r"
+# in "Touareg". Mapping: normalized-model token → spec-text regex.
+_BLOCKET_TRIM_TOKENS = {
+    "gti": r"\bgti\b",
+    "gtd": r"\bgtd\b",
+    "vz": r"\bvz\b",
+    "n": r"\bn\b",          # Hyundai i30 N / i20 N
+    "r": r"\br\b",          # VW Golf R (also matches "R-Line" — acceptable)
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BLOCKET.SE — "mobility" search API (the real structured endpoint)
@@ -301,17 +315,36 @@ async def parse_blocket_api(
 ) -> list[ParsedCar]:
     """Blocket via its structured search API. Pure HTTP (no Playwright).
 
-    Brand → exact `variant` make code (precise); model → free-text `q` (model
-    codes need the taxonomy harvest, a later step). body/fuel/transmission/
-    wheel_drive/price/year all map to server-side params, so results are already
-    relevant; body & drive are tagged from the query (every result matches it).
+    Brand → exact `variant` make code; model → deep `variant` model/trim code
+    when the taxonomy (blocket_variants.json) has one (e.g. "X5 M"→2.749.2466.8360),
+    else free-text `q` + an optional perf-trim post-filter (gti/gtd/r/n/vz absent
+    from the tree). body/fuel/transmission/wheel_drive/price/year all map to
+    server-side params; body & drive are tagged from the query.
     """
     base_params: list[tuple[str, object]] = []
+    # trim_token: set when we fall back to free-text for a performance trim that
+    # Blocket can't target via `variant` (gti/gtd/r/n/vz) → post-filter on it.
+    trim_token: Optional[str] = None
     make_code = _blocket_make_code(brand)
     if make_code:
-        base_params.append(("variant", make_code))
-        if model:
-            base_params.append(("q", model))
+        # Prefer the DEEP model/trim `variant` code (e.g. "X5 M"→2.749.2466.8360)
+        # over make-only `variant` + free-text `q`: free-text returns base-model
+        # pollution ("X5 M" → base X5), the deep code does not.
+        deep_code = resolve_variant(make_code, model) if model else None
+        if deep_code:
+            base_params.append(("variant", deep_code))
+        else:
+            base_params.append(("variant", make_code))
+            if model:
+                base_params.append(("q", model))
+                # No precise node for this model. If it names a performance trim
+                # absent from the tree, remember the token to post-filter on so
+                # free-text doesn't leak base-model cars.
+                model_norm = re.sub(r"[^a-z0-9]+", " ", model.lower()).strip()
+                for tok in _BLOCKET_TRIM_TOKENS:
+                    if tok in model_norm.split():
+                        trim_token = tok
+                        break
     else:
         q = f"{brand} {model}".strip()
         if q:
@@ -341,6 +374,9 @@ async def parse_blocket_api(
     # We filtered by body server-side → safe to tag every result with it.
     body_en, body_ua = normalize_body_type(body_type) if body_type else (None, None)
 
+    # Compiled trim post-filter (only when free-text fallback hit a perf trim).
+    trim_re = re.compile(_BLOCKET_TRIM_TOKENS[trim_token], re.IGNORECASE) if trim_token else None
+
     cars: list[ParsedCar] = []
     seen: set[str] = set()
     async with httpx.AsyncClient(headers=_BLOCKET_API_HEADERS, follow_redirects=True) as client:
@@ -367,6 +403,13 @@ async def parse_blocket_api(
                     continue
                 car = _blocket_doc_to_car(it, rate, body_en, body_ua, drive)
                 if car:
+                    # Drop base-model cars when we asked for a perf trim Blocket
+                    # can't target: the trim token must appear in the model+spec
+                    # text (e.g. "gti" for VW Golf GTI).
+                    if trim_re:
+                        hay = f"{it.get('model') or ''} {it.get('model_specification') or ''} {it.get('heading') or ''}"
+                        if not trim_re.search(hay):
+                            continue
                     seen.add(ext)
                     cars.append(car)
                 if len(cars) >= max_results:

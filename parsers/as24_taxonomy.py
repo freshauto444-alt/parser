@@ -148,7 +148,11 @@ _GROUP_ALIASES: dict[tuple[str, str], str] = {
 
 
 def _resolve_motor(brand_slug: str, group_id: int, trim_digits: str) -> Optional[int]:
-    """Look up motortype_id whose label_norm contains the requested digits."""
+    """Look up motortype_id whose label_norm contains the requested digits.
+
+    Legacy Mercedes-only digit path (kept for the `_PERF_RX` strategy). Prefer
+    `_resolve_motor_exact` for full-model matching across all brands.
+    """
     motors = _MOTORS.get((brand_slug, group_id), [])
     candidates = [
         m for m in motors
@@ -157,6 +161,49 @@ def _resolve_motor(brand_slug: str, group_id: int, trim_digits: str) -> Optional
     if not candidates:
         return None
     # Pick the entry with most listings — most representative.
+    candidates.sort(key=lambda m: -(m.get("listings_count") or 0))
+    return int(candidates[0]["motortype_id"])
+
+
+def _motor_key_variants(model_norm: str) -> set[str]:
+    """Normalized forms of a requested model to compare against motor labels.
+
+    Motors are stored with `model_label_norm` like "x5 m", "c 63 amg",
+    "golf gti". The AI/user may type "c63", "c 63", "c 63 amg" — all the same
+    trim. We generate equivalent forms so the *exact* comparison still hits:
+      - the raw normalized model ("x5 m")
+      - a space-inserted form splitting an alpha-prefix from trailing digits
+        so "c63" → "c 63" (AS24 always spaces letter↔digit in motor labels)
+    Matching stays exact against this set — we never substring-match, so
+    "x5" can't accidentally hit "x5 m" (or vice-versa).
+    """
+    forms = {model_norm}
+    # Insert a space between an alpha run and a following digit run anywhere:
+    # "c63" → "c 63", "x5m"(rare) untouched-but-harmless. Collapse afterwards.
+    spaced = re.sub(r"([a-z])(\d)", r"\1 \2", model_norm)
+    spaced = re.sub(r"(\d)([a-z])", r"\1 \2", spaced)
+    forms.add(re.sub(r"\s+", " ", spaced).strip())
+    return forms
+
+
+def _resolve_motor_exact(brand_slug: str, group_id: int, model_norm: str) -> Optional[int]:
+    """Look up the motortype_id whose `model_label_norm` EXACTLY equals the
+    requested full model (e.g. "x5 m" → mt368, "c 63 amg"/"c63" → mt310).
+
+    Generalized across ALL brands. Conservative: only an exact normalized
+    match counts — if nothing matches we return None and the caller keeps the
+    group-only cat (never attach a wrong motor). When several rows share the
+    label (duplicate generations), the one with the most listings wins.
+    """
+    motors = _MOTORS.get((brand_slug, group_id), [])
+    wanted = _motor_key_variants(model_norm)
+    candidates = [
+        m for m in motors
+        if m.get("model_label_norm")
+        and _normalize_model(m["model_label_norm"]) in wanted
+    ]
+    if not candidates:
+        return None
     candidates.sort(key=lambda m: -(m.get("listings_count") or 0))
     return int(candidates[0]["motortype_id"])
 
@@ -217,9 +264,30 @@ def resolve_cat(brand: str, model: str) -> Optional[str]:
     for cand in candidates:
         group_id = _GROUPS.get((brand_slug, cand))
         if group_id is not None:
+            # The base group resolved (e.g. "x5" → group 16406). Before returning
+            # the bare group, check whether the FULL requested model names a
+            # specific per-trim motor within that group ("x5 m" → mt368). This
+            # is the generalized motor path — works for ALL brands, not just
+            # Mercedes. Use the original model_norm (not the shortened candidate)
+            # so "x5 m" still resolves its motor even though we matched group via
+            # the stripped "x5" candidate. Exact-only → "x5" never picks "x5 m".
+            #
+            # Only attach a motor when the request is MORE SPECIFIC than the
+            # group itself (carries a trim beyond the group label). A bare
+            # "x5" == the group label must stay group-wide, even though an
+            # equally-named "x5" motor row exists — otherwise we'd wrongly pin
+            # the search to one arbitrary engine variant.
+            if model_norm != cand:
+                mt = _resolve_motor_exact(brand_slug, group_id, model_norm)
+                if mt is not None:
+                    return f"ma{make_id}gr{group_id}mt{mt}"
             return f"ma{make_id}gr{group_id}"
 
-    # 2. Mercedes-style AMG trim: "e 63" → base class "e-klasse" + motor 467.
+    # 2. Mercedes-style AMG trim: "e 63" / "c 63 amg" → base class "e-klasse" +
+    #    motor. The trim model itself isn't its own group, so it's not caught
+    #    above. Resolve the base class group, then attach the motor — first via
+    #    the generalized exact full-model match ("c 63 amg" == motor label), then
+    #    falling back to the legacy digit-substring match ("e 63" → digits "63").
     perf = _PERF_RX.match(model_norm)
     if perf:
         letter, digits = perf.group(1).lower(), perf.group(2)
@@ -228,7 +296,10 @@ def resolve_cat(brand: str, model: str) -> Optional[str]:
             base_id = _GROUPS.get((brand_slug, base_label))
             if base_id is None:
                 continue
-            mt = _resolve_motor(brand_slug, base_id, digits)
+            mt = (
+                _resolve_motor_exact(brand_slug, base_id, model_norm)
+                or _resolve_motor(brand_slug, base_id, digits)
+            )
             if mt is not None:
                 return f"ma{make_id}gr{base_id}mt{mt}"
             return f"ma{make_id}gr{base_id}"
