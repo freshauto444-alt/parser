@@ -441,10 +441,32 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
         req_tokens = {t for t in re.split(r'[\s\-]+', wanted_model) if t and t != "series" and t != "class" and t != "klasse"}
         # Sub-model numbers: "3 series" → accept models starting with 3 (320, 330, 335, M3).
         # Exception: "3 series" must NOT match "X3" (separate SUV line) nor "330 i" etc only if first digit is 3.
+        # Performance-trim tokens: when the request names one of these, a base
+        # model that lacks it (plain "X5" for "X5 M", "Golf" for "Golf GTI") must
+        # NOT match — otherwise the loose substring/token-overlap below floods the
+        # result with the wrong, often over-budget, base variant (the reported bug:
+        # "X5 M" returned 47 base X5 + 1 real M). Fused trims (M3, RS6, S5) are a
+        # single token and matched normally; only STANDALONE trim tokens gate here.
+        _PERF_TRIMS = {"gti", "gtd", "amg", "rs", "gts", "competition", "jcw",
+                       "cupra", "abarth", "quadrifoglio", "m", "n", "r"}
+        wanted_trims = req_tokens & _PERF_TRIMS
+
         def _model_matches(c_model: str) -> bool:
             cm = (c_model or "").lower().strip()
             if not cm:
                 return True  # unknown model → don't drop
+            # Trim gate (runs FIRST so it overrides the permissive matches below):
+            # the car must carry EVERY requested trim token AND share the base
+            # model token — so "X5 M" rejects plain "X5" (no trim) and "X4 M"
+            # (trim ok, wrong base), and "Golf GTI" rejects "Polo GTI".
+            if wanted_trims:
+                cm_tok = {t for t in re.split(r'[\s\-]+', cm) if t}
+                if not wanted_trims.issubset(cm_tok):
+                    return False
+                base_tokens = req_tokens - wanted_trims
+                if base_tokens and not (base_tokens & cm_tok):
+                    return False  # trim matches but base model differs
+                return True
             if wanted_model in cm or cm in wanted_model:
                 return True
             # Series match: "3 series" user wants → accept 3xx numbers (320, 330, M3 340e etc)
