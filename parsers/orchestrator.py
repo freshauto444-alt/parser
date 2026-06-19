@@ -324,7 +324,12 @@ SOURCES = {
 
 
 SCRAPE_DEADLINE_S = 14.0  # Hard wall-clock budget per cold scrape
-EARLY_RETURN_THRESHOLD = 80  # Once we have this many unique cars, stop waiting
+# Raw cars to gather before we stop waiting on slower sources. Kept high because
+# the post-scrape pipeline (brand+model gate, price/year filter, cross-source
+# dedup) routinely sheds 50-80% — a popular query streams ~165 raw but collapses
+# to ~30 after filtering. We need a deep raw pool so the FILTERED result still
+# clears the ">50 results" bar. The 14s deadline still bounds latency.
+EARLY_RETURN_THRESHOLD = 130  # Once we have this many unique cars, stop waiting
 
 
 async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCar], bool]:
@@ -765,7 +770,7 @@ async def search_stream(
     3. Apply user filters per batch so user sees correctly-filtered results
        progressively, not raw scraped cars.
     """
-    from .cache import cache_key as _ck, _store
+    from .cache import cache_key as _ck, _store, _read_entry
     import time as _t
 
     # Same cache key format as search()
@@ -782,10 +787,14 @@ async def search_stream(
         transmission=params.get("transmission"),
     )
 
-    # Cache hit — emit immediately, no scrape
-    entry = _store.get(key)
+    # Cache hit — emit immediately, no scrape.
+    # _read_entry tolerates both legacy 2-tuples and the (data, ts, complete)
+    # quality-aware form — unpacking the raw entry as a 2-tuple here was crashing
+    # the stream ("too many values to unpack") on every trim query that had a
+    # cached 3-tuple.
+    entry = _read_entry(_store.get(key))
     if entry is not None:
-        cached_cars, ts = entry
+        cached_cars, ts, _complete = entry
         # Apply same post-cache filters as search()
         results = list(cached_cars)
         price_from = params.get("price_from")
@@ -882,6 +891,8 @@ async def search_stream(
     if all_cars:
         try:
             unique = deduplicate(all_cars)
-            _store[key] = (unique, _t.monotonic())
+            # 3-tuple form (data, ts, complete) — uniform with the quality-aware
+            # cache. A streamed union is best-effort "complete".
+            _store[key] = (unique, _t.monotonic(), True)
         except Exception:
             pass
