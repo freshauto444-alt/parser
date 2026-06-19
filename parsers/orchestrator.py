@@ -521,6 +521,64 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
         if len(all_cars) != before:
             logger.info(f"[filter] model {before} → {len(all_cars)} (wanted={wanted_model})")
 
+        # ── Spec/hp-aware refinement for trims the `model` field can't carry ──────
+        # Some performance trims are labelled only in the listing title or engine,
+        # never the model field, so the token gate above can't see them and base
+        # models flood the result. Disambiguate with title_line + engine + hp.
+        def _perf_text(c) -> str:
+            return " ".join(filter(None, [c.model, c.title_line, c.engine])).lower()
+
+        def _displacement(engine) -> float | None:
+            if not engine:
+                return None
+            m = re.search(r"(\d\.\d)", engine)
+            return float(m.group(1)) if m else None
+
+        # (a) Single-letter N / R hot-hatches (Hyundai i30 N → model="I30", real
+        #     trim only in the title). The catch: "N-Line" / "R-Line" are cosmetic
+        #     packages on a BASE engine — NOT the hot-hatch — so they must be
+        #     excluded. Real N/R are ≥240hp or ≥1.9L; the packages are not.
+        nr_trims = req_tokens & {"n", "r"}
+        if nr_trims:
+            def _nr_ok(c) -> bool:
+                text = _perf_text(c)
+                hp = c.horsepower
+                disp = _displacement(c.engine)
+                for t in nr_trims:
+                    stripped = re.sub(rf"\b{t}[\s\-]?line\b", " ", text)  # drop "<t>-line"
+                    strong = (
+                        f"{t} performance" in text
+                        or (hp is not None and hp >= 240)
+                        or (disp is not None and disp >= 1.9
+                            and re.search(rf"\b{t}\b", stripped) is not None)
+                    )
+                    # No hp AND no displacement signal → trust a bare standalone token.
+                    if hp is None and disp is None:
+                        strong = strong or bool(re.search(rf"\b{t}\b", stripped))
+                    if not strong:
+                        return False
+                return True
+            before_nr = len(all_cars)
+            all_cars = [c for c in all_cars if _nr_ok(c)]
+            if len(all_cars) != before_nr:
+                logger.info(f"[filter] N/R trim {before_nr} → {len(all_cars)}")
+
+        # (b) Full "X-M" SUVs (X5 M / X3 M / X4 M / X6 M — all ≥460hp petrol) must
+        #     exclude the X5 M50d / M50i diesels (≤400hp) that AS24's base-slug
+        #     fallback leaks in labelled model="X5".
+        base_no_trim = req_tokens - wanted_trims
+        if "m" in wanted_trims and any(b.startswith("x") for b in base_no_trim):
+            def _xm_ok(c) -> bool:
+                cm = (c.model or "").lower()
+                if re.search(r"\bm\b", cm) or "competition" in _perf_text(c):
+                    return True
+                hp = c.horsepower
+                return hp is None or hp >= 460
+            before_xm = len(all_cars)
+            all_cars = [c for c in all_cars if _xm_ok(c)]
+            if len(all_cars) != before_xm:
+                logger.info(f"[filter] X-M hp guard {before_xm} → {len(all_cars)}")
+
     # ── Quality filter — remove clearly bad listings ──────────────────────────
     # 1. Price sanity: <€3 000 or >€500 000 → broken data (currency typo, scam)
     # 2. Explicit damage (has_damage==True) — drop
