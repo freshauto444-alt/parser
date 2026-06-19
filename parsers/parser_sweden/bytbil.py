@@ -431,8 +431,15 @@ async def parse_bytbil(
         # ── Fetch list pages (paginate until enough URLs or no new ones) ──
         from ..rate_limiter import acquire as _rl
         # Determine how many pages to fetch — 1 page yields ~24 URLs.
+        # Cap 3→8: with PER_SOURCE raised to 120, 3 pages (~72 URLs) capped the
+        # list far below what trim/model-token filtering needs. 8 pages (~190 URLs)
+        # give the per-URL token filter enough to surface 50+. List pages are
+        # fetched sequentially (cheap GETs, the loop breaks early once it has
+        # max_results URLs or a page adds none), and the EXPENSIVE detail fetches
+        # run in parallel under Semaphore(5) and are sliced to max_results, so
+        # deeper list pagination does NOT multiply the detail-fetch latency.
         pages_to_fetch = max(1, (max_results + 23) // 24)
-        pages_to_fetch = min(pages_to_fetch, 3)  # safety cap
+        pages_to_fetch = min(pages_to_fetch, 8)  # safety cap
 
         # Extract model tokens for flexible matching. Bytbil slugs use Swedish naming
         # ("3-serien" for BMW 3 Series, "x5" for BMW X5) — exact slug match fails.

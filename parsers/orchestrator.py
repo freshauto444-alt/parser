@@ -323,13 +323,21 @@ SOURCES = {
 }
 
 
-SCRAPE_DEADLINE_S = 14.0  # Hard wall-clock budget per cold scrape
+SCRAPE_DEADLINE_S = 18.0  # Hard wall-clock budget per cold scrape
+# Bumped 14→18: with the deeper per-source page caps (AS24 5→14 pages, Bytbil
+# 3→8, Blocket 10 pages honoured up to a higher PER_SOURCE) a COLD scrape fetches
+# more pages. AS24 pages 2+ are already fetched in PARALLEL (one asyncio.gather),
+# so deeper depth adds ~one extra round-trip of latency, not N× — but Bytbil's
+# per-URL detail fetches (Semaphore(5)) and Blocket's enrich do scale with depth,
+# so a modest deadline bump keeps cold scrapes from being cut short. Cold scrapes
+# are rare (2h cache), so a slightly longer cold path is an acceptable trade for
+# 5× the raw pool.
 # Raw cars to gather before we stop waiting on slower sources. Kept high because
 # the post-scrape pipeline (brand+model gate, price/year filter, cross-source
 # dedup) routinely sheds 50-80% — a popular query streams ~165 raw but collapses
 # to ~30 after filtering. We need a deep raw pool so the FILTERED result still
-# clears the ">50 results" bar. The 14s deadline still bounds latency.
-EARLY_RETURN_THRESHOLD = 130  # Once we have this many unique cars, stop waiting
+# clears the ">50 results" bar. The 18s deadline still bounds latency.
+EARLY_RETURN_THRESHOLD = 250  # Once we have this many unique cars, stop waiting
 
 
 async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCar], bool]:
@@ -340,8 +348,8 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
         For body-only / no-brand queries, Blocket free-text returns garbage and
         slows us down without adding quality.
 
-    Returns as soon as: all tasks done, OR ≥80 unique cars, OR 14s deadline.
-    Pending tasks are cancelled.
+    Returns as soon as: all tasks done, OR EARLY_RETURN_THRESHOLD unique cars,
+    OR the SCRAPE_DEADLINE_S deadline. Pending tasks are cancelled.
     """
     from . import metrics
     import time as _t
@@ -778,9 +786,12 @@ async def search(params: dict, max_results: int = DEFAULT_MAX_RESULTS) -> list[P
         body_type=params.get("body_type"),
         transmission=params.get("transmission"),
     )
-    # Always scrape 50 per source (~150 total) regardless of requested limit.
-    # Cache stores full results; limit applied at return time.
-    PER_SOURCE = 50
+    # Always scrape 120 per source (~360 total) regardless of requested limit.
+    # Cache stores full results; limit applied at return time. Raised 50→120 so
+    # that for a TRIM query ("Golf GTI") — where AS24's cat= resolves to the base
+    # Golf GROUP and the orchestrator trim gate keeps only the ~36% GTI subset —
+    # the raw pool is deep enough that the surviving subset still clears 50+.
+    PER_SOURCE = 120
 
     results = await get_or_scrape(
         key=key,
@@ -825,7 +836,7 @@ async def search(params: dict, max_results: int = DEFAULT_MAX_RESULTS) -> list[P
 
 
 async def search_stream(
-    params: dict, per_source: int = 50,
+    params: dict, per_source: int = 120,
 ) -> AsyncIterator[tuple[str, list[ParsedCar]]]:
     """Progressive SSE search:
 

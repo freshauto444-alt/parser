@@ -381,6 +381,10 @@ async def parse_blocket_api(
     seen: set[str] = set()
     async with httpx.AsyncClient(headers=_BLOCKET_API_HEADERS, follow_redirects=True) as client:
         page = 1
+        # Loop already scales with max_results (now 120 via PER_SOURCE) up to the
+        # 10-page cap and honours the API's own `last` page — so raising PER_SOURCE
+        # alone deepens Blocket pagination. The page<=10 cap stays: at ~30-40
+        # docs/page it can already surface 300+ docs, far past what we need.
         while len(cars) < max_results and page <= 10:
             try:
                 resp = await client.get(

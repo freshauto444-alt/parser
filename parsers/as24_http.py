@@ -416,8 +416,19 @@ async def search(
     try:
         all_listings = []
         total_count = 0
-        pages_to_fetch = max(1, (max_results + 19) // 20)
-        pages_to_fetch = min(pages_to_fetch, 5)
+        # AS24 returns 20 listings/page. The orchestrator passes max_results =
+        # PER_SOURCE (120), but a TRIM query ("Golf GTI") resolves to AS24's base
+        # Golf GROUP, so the pages are MIXED Golf variants and the orchestrator
+        # trim gate downstream keeps only the ~36% GTI subset. To leave the gate a
+        # deep enough mixed pool, fetch ~1.5× the requested count in pages (so 120
+        # asked → ~180 mixed fetched → ~65 GTI survive), capped at 14 pages.
+        # Cap 5→14: 5 pages (~100 mixed) yielded ~18 GTI; 14 pages (~280 mixed)
+        # comfortably clear 50+ post-gate. Pages 2+ are fetched in PARALLEL (single
+        # asyncio.gather below), so the extra depth costs ~one round-trip of
+        # latency, not N×.
+        target_listings = int(max_results * 1.5)
+        pages_to_fetch = max(1, (target_listings + 19) // 20)
+        pages_to_fetch = min(pages_to_fetch, 14)
 
         # ── Page 1: fetch immediately to get total_count ──────────────────
         page1_url = re.sub(r'page=\d+', 'page=1', url) if 'page=' in url else url + '&page=1'
@@ -505,7 +516,10 @@ async def search(
                         logger.info(f"[as24] slug fallback recovered {len(all_listings)} listings (total: {total_count})")
 
         # ── Pages 2+: fetch in parallel with staggered delays ─────────────
-        if pages_to_fetch > 1 and len(all_listings) < max_results:
+        # Gate on target_listings (the deeper mixed-pool goal), not max_results —
+        # for a base-group trim query we WANT the full mixed pool so the
+        # downstream trim gate has enough to keep 50+.
+        if pages_to_fetch > 1 and len(all_listings) < target_listings:
             async def _fetch_page(page_num: int) -> list[dict]:
                 await rate_acquire("autoscout24.com")
                 p_url = re.sub(r'page=\d+', f'page={page_num}', url) if 'page=' in url else url + f'&page={page_num}'
@@ -537,7 +551,11 @@ async def search(
 
             logger.info(f"[as24] Pages 2-{pages_to_fetch}: +{sum(len(r) for r in page_results)} listings")
 
-        return all_listings[:max_results], total_count
+        # Return up to target_listings (the deeper mixed pool), not just
+        # max_results — the orchestrator's trim gate runs downstream and needs the
+        # full mixed Golf group to extract enough GTI. For non-trim queries the
+        # gate is a no-op, so the extra cars are simply more inventory.
+        return all_listings[:target_listings], total_count
 
     finally:
         if HAS_CURL_CFFI:
