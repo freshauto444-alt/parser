@@ -32,15 +32,22 @@ async def get_sek_to_eur() -> float:
 # AS24 was 5/min — too conservative, made 8-car detail enrichment hit cache timeout.
 # With chrome136 TLS fingerprint + 2-3s jitter retry, 30/min is safe. Observable
 # in /metrics — bump down if we see "blocked" kind spike.
-# Per-domain request budget (requests/min, token bucket). Raised after deeper
-# pagination (up to ~9 AS24 pages/query) made back-to-back searches starve each
-# other on the old 30/min AS24 budget — the 2nd query couldn't get tokens within
-# its deadline → 0 AS24 cars. AS24's blocks come from IP reputation (datacenter
-# egress), NOT from our request rate, so a modest bump doesn't raise block risk.
+# Per-domain request budget (requests/min, token bucket).
+#
+# Deliberately set very high — effectively OFF. Reasoning: the limit's only real
+# value would be avoiding rate-based bans, but the sources' blocks come from IP
+# reputation (datacenter egress), NOT our request rate, so a low limit bought us
+# nothing while it actively STARVED concurrent searches (a 30/min AS24 budget,
+# shared across the whole process, couldn't serve 5 users × ~9 pages → the 2nd+
+# query got 0 AS24 cars). The 2h cache already bounds real scrape volume.
+#
+# These stay as a runaway SAFETY NET only — a buggy loop or a traffic storm still
+# can't fire thousands of requests/min at one source. Raise/lower per source here
+# if a genuine need appears (a source starts rate-banning us by request count).
 RATE_LIMITS = {
-    "autoscout24.com": 50,
-    "bytbil.com": 40,
-    "blocket.se": 45,
+    "autoscout24.com": 1200,
+    "bytbil.com": 1200,
+    "blocket.se": 1200,
 }
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
