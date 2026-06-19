@@ -10,10 +10,30 @@ import time
 from typing import Callable, Awaitable
 from cachetools import TTLCache
 from loguru import logger
-from .config import CACHE_TTL_SECONDS, CACHE_STALE_SECONDS, CACHE_MAX_ENTRIES
+from .config import (CACHE_TTL_SECONDS, CACHE_STALE_SECONDS,
+                     CACHE_PARTIAL_STALE_SECONDS, CACHE_MAX_ENTRIES)
 
-# L1 in-memory cache: (data, timestamp) tuples
+# L1 in-memory cache: (data, timestamp, complete) tuples. `complete=False` marks a
+# degraded scrape (a source failed/was cancelled, or the union came back empty) —
+# those get a much shorter fresh window so they're re-scraped, not served for an hour.
 _store = TTLCache(maxsize=CACHE_MAX_ENTRIES, ttl=CACHE_TTL_SECONDS)
+
+
+def _read_entry(entry):
+    """Unpack a store entry tolerantly: legacy 2-tuples are treated as complete."""
+    if entry is None:
+        return None
+    if len(entry) == 3:
+        return entry  # (data, ts, complete)
+    data, ts = entry
+    return data, ts, True
+
+
+def _unpack_scrape(result):
+    """A scrape callable may return either a plain list (legacy) or (list, complete)."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], bool):
+        return result[0], result[1]
+    return result, True
 
 # Singleflight: one scrape per cache key, concurrent callers share result
 _flights: dict[str, asyncio.Future] = {}
@@ -53,15 +73,22 @@ async def get_or_scrape(key: str, scrape: Callable[[], Awaitable[list]]) -> list
     - MISS → scrape (singleflight: only 1 concurrent scrape per key)
     """
     # Check cache
-    entry = _store.get(key)
+    entry = _read_entry(_store.get(key))
     if entry is not None:
-        data, ts = entry
+        data, ts, complete = entry
         age = time.monotonic() - ts
-        if age < CACHE_STALE_SECONDS:
-            return data  # fresh
-        # stale — return + async refresh
-        asyncio.create_task(_refresh(key, scrape))
-        return data
+        fresh_window = CACHE_STALE_SECONDS if complete else CACHE_PARTIAL_STALE_SECONDS
+        if age < fresh_window:
+            return data  # fresh (full hour if complete; ~90s if degraded)
+        # Past the fresh window. A COMPLETE entry is served stale-while-revalidate
+        # (instant return + background refresh). A DEGRADED entry must NOT be served
+        # again — fall through to a synchronous re-scrape so the user gets the real
+        # (recovered) result, not the stale 0/partial set.
+        if complete:
+            asyncio.create_task(_refresh(key, scrape))
+            return data
+        # degraded + expired → drop it and re-scrape below
+        _store.pop(key, None)
 
     # Singleflight
     async with _lock:
@@ -90,15 +117,15 @@ async def get_or_scrape(key: str, scrape: Callable[[], Awaitable[list]]) -> list
 
 async def _run(key: str, scrape: Callable, fut: asyncio.Future):
     try:
-        data = await scrape()
-        _store[key] = (data, time.monotonic())
+        data, complete = _unpack_scrape(await scrape())
+        _store[key] = (data, time.monotonic(), complete)
         if not fut.done():
             fut.set_result(data)
     except Exception as e:
         logger.error(f"[cache] scrape failed: {key}: {e}")
         if not fut.done():
             # Try to return stale cached data instead of empty
-            stale = _store.get(key)
+            stale = _read_entry(_store.get(key))
             if stale is not None:
                 logger.info(f"[cache] returning stale data for {key}")
                 fut.set_result(stale[0])
@@ -114,10 +141,17 @@ async def _refresh(key: str, scrape: Callable):
         if key in _flights:
             return  # someone else refreshing
     try:
-        data = await scrape()
-        if data:
-            _store[key] = (data, time.monotonic())
-            logger.debug(f"[cache] refreshed: {key} ({len(data)} items)")
+        data, complete = _unpack_scrape(await scrape())
+        if not data:
+            return
+        # Don't let a degraded refresh overwrite a previously-complete entry —
+        # a flaky moment shouldn't downgrade good cached data.
+        prev = _read_entry(_store.get(key))
+        if prev is not None and prev[2] and not complete:
+            logger.debug(f"[cache] refresh degraded ({len(data)}) — keeping prior complete entry")
+            return
+        _store[key] = (data, time.monotonic(), complete)
+        logger.debug(f"[cache] refreshed: {key} ({len(data)} items, complete={complete})")
     except Exception as e:
         logger.warning(f"[cache] refresh failed: {key}: {e}")
 

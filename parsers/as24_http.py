@@ -426,9 +426,13 @@ async def search(
         from .rate_limiter import acquire as rate_acquire
         await rate_acquire("autoscout24.com")
 
-        # One retry on 403/429/5xx — Akamai sometimes does a one-off challenge on cold IP.
+        # One retry on 403/404/429/5xx — Akamai sometimes does a one-off challenge on
+        # cold IP and returns a 404 (not just 403). On Railway's shared egress IP this
+        # is the dominant AS24 failure mode (last_error "HTTP 404", success_rate ~0.33);
+        # a single retry after a short jitter recovers most of them. A genuine bad slug
+        # still falls through to the trim-slug / cat→slug fallbacks below.
         resp = await client.get(page1_url)
-        if resp.status_code in (403, 429, 500, 502, 503) or (resp.status_code == 200 and "__NEXT_DATA__" not in resp.text):
+        if resp.status_code in (403, 404, 429, 500, 502, 503) or (resp.status_code == 200 and "__NEXT_DATA__" not in resp.text):
             await asyncio.sleep(random.uniform(1.5, 3.0))
             resp = await client.get(page1_url)
 

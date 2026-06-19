@@ -2,6 +2,7 @@
 # Bytbil.com — fully HTTP → list[ParsedCar]. Extracted from parser_sweden.py.
 
 import asyncio
+import random
 import re
 import json
 from typing import Optional
@@ -449,6 +450,16 @@ async def parse_bytbil(
                 await _rl("bytbil.com")
                 resp = await client.get(page_url, timeout=20)
                 html = resp.text
+                # Bytbil silently returns an empty/challenge page on ~44% of cold
+                # hits (success_rate 0.556). When page 1 comes back non-200 or with
+                # zero listings in the HTML, retry once — otherwise a trim that only
+                # Bytbil carries (C63 AMG, Golf GTI) collapses to 0 for the whole
+                # cache window. A genuinely empty result simply retries one cheap GET.
+                if page_num == 1 and (resp.status_code != 200 or "/personbil" not in html):
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    await _rl("bytbil.com")
+                    resp = await client.get(page_url, timeout=20)
+                    html = resp.text
             except Exception as e:
                 logger.error(f"[bytbil] list page {page_num} error: {e}")
                 break

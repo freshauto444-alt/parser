@@ -45,6 +45,11 @@ CIRCUIT_RECOVERY_SECONDS = 300
 # ── Cache TTLs ───────────────────────────────────────────────────────────────
 CACHE_TTL_SECONDS = 7200         # 2 hours — memory cache
 CACHE_STALE_SECONDS = 3600       # 1 hour — after this, background refresh
+# Degraded scrapes (a source errored / was cancelled / total came back empty) must
+# NOT be served as "fresh" for the full hour — that's how a transient Akamai 404 on
+# AS24 or a flaky-empty Bytbil poisons a popular query (C63/GTI → 0) for an hour.
+# Mark those results "incomplete" and re-scrape them after this short window instead.
+CACHE_PARTIAL_STALE_SECONDS = 90
 CACHE_MAX_ENTRIES = 500
 
 # ── Hot deals cron ───────────────────────────────────────────────────────────

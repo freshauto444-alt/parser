@@ -327,7 +327,7 @@ SCRAPE_DEADLINE_S = 14.0  # Hard wall-clock budget per cold scrape
 EARLY_RETURN_THRESHOLD = 80  # Once we have this many unique cars, stop waiting
 
 
-async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
+async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCar], bool]:
     """Tiered parallel scrape with early termination.
 
     Tier 1 (always): AS24 + Bytbil — fast HTTP, reliable.
@@ -371,6 +371,8 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
 
     all_cars: list[ParsedCar] = []
     done_names: set[str] = set()
+    errored: set[str] = set()       # sources that raised — result is degraded
+    deadline_hit = False            # ran out of wall-clock → some sources cancelled
     deadline = _t.monotonic() + SCRAPE_DEADLINE_S
 
     pending = set(tasks.values())
@@ -387,6 +389,7 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
 
         if not done:
             # Hit deadline
+            deadline_hit = True
             logger.warning(f"[scrape] deadline {SCRAPE_DEADLINE_S}s hit, "
                            f"cancelling {len(pending)} pending source(s)")
             for t in pending:
@@ -400,6 +403,7 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
                     name, payload = result
                     done_names.add(name)
                     if isinstance(payload, Exception):
+                        errored.add(name)
                         logger.error(f"[{name}] {payload}")
                     elif payload:
                         all_cars.extend(payload)
@@ -569,7 +573,23 @@ async def _scrape_all(params: dict, per_source: int = 20) -> list[ParsedCar]:
         except Exception:
             pass
 
-    return unique
+    # ── Result quality flag (drives cache TTL — see cache.get_or_scrape) ───────
+    # "complete" = a result we trust enough to serve fresh for the full hour.
+    # We trust it when EITHER we already gathered plenty of cars (early-return
+    # threshold — sources were cancelled only because we had enough), OR every
+    # active source finished cleanly (no exception, not deadline-cancelled) and
+    # returned a non-empty union. A degraded scrape (a source 404'd / timed out /
+    # the whole union came back empty) is "incomplete" → short TTL → re-scraped
+    # on the next request instead of poisoning the query for an hour.
+    active = [s for s in active_sources if s in SOURCES]
+    all_sources_ok = (not errored and not deadline_hit
+                      and all(s in done_names for s in active))
+    complete = len(unique) >= EARLY_RETURN_THRESHOLD or (all_sources_ok and len(unique) > 0)
+    if not complete:
+        logger.info(f"[scrape] DEGRADED result ({len(unique)} cars; "
+                    f"errored={errored or '∅'}, deadline_hit={deadline_hit}) "
+                    f"— caching with short TTL")
+    return unique, complete
 
 
 # ══════════════════════════════════════════════════════════════════════════════
