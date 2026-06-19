@@ -34,6 +34,14 @@ def main() -> int:
         ("Mercedes C 63 AMG", MERCEDES, "C 63 AMG", "2.785.3776.2002576"),
         ("Audi S3", AUDI, "S3", "2.744.2482.3731"),
         ("VW Golf GTI -> fallback", VW, "Golf GTI", None),
+        # English→Swedish body-class bridge: site sends "3 Series"/"C-Class",
+        # Blocket stores "3 serie"/"c klass". Without the bridge these popular
+        # queries fall to polluted free-text. Series/class nodes are 1.* codes.
+        ("BMW 3 Series -> serie node", BMW, "3 Series", "1.749.2132"),
+        ("BMW 5 Series -> serie node", BMW, "5 Series", "1.749.2131"),
+        ("Mercedes C-Class -> klass node", MERCEDES, "C-Class", "1.785.3776"),
+        ("Mercedes E-Class -> klass node", MERCEDES, "E-Class", "1.785.3775"),
+        ("Mercedes GLC-Class -> klass node", MERCEDES, "GLC-Class", "1.785.2000332"),
         ("Unknown make -> None", "9.999", "Whatever", None),
     ]
 

@@ -66,6 +66,15 @@ def resolve_variant(make_code: str, model: str) -> Optional[str]:
     if not q:
         return None
 
+    # 0) English → Swedish body-class terms. Blocket names the series/class nodes
+    #    in Swedish ("3 serie" = 1.749.2132, "c klass" = 1.785.3776) but the site
+    #    sends English ("3 Series", "C-Class"). Without this bridge those popular
+    #    queries miss the variant tree, fall back to free-text `q`, and return a
+    #    polluted mix of other series that the model gate then sheds (3 Series:
+    #    60 raw → 23). Whole-word swap so "classic"/"serience" aren't touched.
+    q = re.sub(r"\bseries\b", "serie", q)
+    q = re.sub(r"\b(class|klasse)\b", "klass", q)
+
     # 1) exact
     if q in bucket:
         return bucket[q]
