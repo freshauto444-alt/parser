@@ -248,6 +248,20 @@ def resolve_cat(brand: str, model: str) -> Optional[str]:
     if stripped != model_norm:
         _add_variants(stripped)
 
+    # BMW M-Performance variants (M240i, M340i, M550i, M135i, M440i…) are NOT their
+    # own AS24 group — they're a motor inside the base series, and the path slug
+    # (/bmw/m240i) 404s, so without this they resolve to nothing → 0 from AS24.
+    # Map "m<S>NN[i/d]" to the base "<S> series" group (the post-scrape model gate
+    # then keeps the M-perf cars). Full-M cars (M2/M3/M5) are their own groups and
+    # have only one digit, so they don't match this two-digit-suffix pattern.
+    if brand_slug == "bmw":
+        # "m240i", "m340i xDrive", "m135i" → series digit; "m2"/"m3" (full M, one
+        # digit) don't match (need the 2-digit motor suffix).
+        _mperf = re.match(r"^m(\d)\d{2}", model_norm.replace(" ", ""))
+        if _mperf:
+            _add(f"{_mperf.group(1)} series")
+            _add(f"{_mperf.group(1)}er")
+
     # Robustness against trim / spec / make-prefix noise the AI sometimes tacks on
     # ("SQ5 TDI Competition", "Audi SQ5", "S Q5"). The taxonomy stores only base
     # group labels ("sq5"), so progressively drop trailing tokens and an optional
