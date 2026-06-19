@@ -24,6 +24,31 @@ from ..base import (
 #  BYTBIL.COM — fully HTTP
 # ══════════════════════════════════════════════════════════════════════════════
 
+def bytbil_freetext(model: str) -> str:
+    """Derive a SAFE Bytbil ``FreeText`` value from a model name.
+
+    Live probing (2026-06-19) showed Bytbil's FreeText only matches a SINGLE
+    model token as a prefix — anything with a space or a bare short token returns
+    ZERO results, even though ``Makes=<brand>`` alone always returns a full page:
+
+        FreeText="Golf"   -> 24      FreeText="Golf R"  -> 0
+        FreeText="I30"    -> 24      FreeText="I30 N"   -> 0
+        FreeText="Mazda6" -> 24      FreeText="6"       -> 0   FreeText="Mazda 6" -> 0
+
+    So multi-word/trim models ("Golf R", "i30 N", "M340i xDrive") and bare-digit
+    models ("6") silently collapsed that source to 0 — the SOURCE_0 class the
+    pipeline detector surfaced on 6 of 11 targets. Fix: send only the first token,
+    and only when it's a usable prefix (len>=3, alphanumeric, no separators);
+    otherwise send nothing and lean on ``Makes`` + the Swedish-native slug token
+    filter below for precision. Recall strictly improves (0 -> a full page); the
+    downstream model gate narrows the trim.
+    """
+    if not model:
+        return ""
+    first = model.strip().split()[0] if model.strip() else ""
+    return first if len(first) >= 3 and first.isalnum() else ""
+
+
 def _parse_bytbil_detail(html: str, url: str) -> dict:
     """
     Парсить HTML деталей Bytbil.
@@ -396,7 +421,10 @@ async def parse_bytbil(
     path_seg, vt_param = _vt_map.get(vehicle_type, ("bil", "bil"))
 
     make_param = brand.title() if brand else ""
-    model_param = model.title() if model else ""
+    # FreeText must be a single usable token or Bytbil returns 0 — see
+    # bytbil_freetext(). The full model (incl. trim) is still matched downstream by
+    # the Swedish slug token filter and the orchestrator/site model gates.
+    model_param = bytbil_freetext(model.title() if model else "")
     price_sek_to = int(price_to_eur / sek_to_eur_rate) if price_to_eur else ""
     price_sek_from = int(price_from_eur / sek_to_eur_rate) if price_from_eur else ""
     fuel_param = _fuel_map.get((fuel or "").split(",")[0].strip().lower(), "") if fuel else ""
