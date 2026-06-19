@@ -663,11 +663,20 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
     active = [s for s in active_sources if s in SOURCES]
     all_sources_ok = (not errored and not deadline_hit
                       and all(s in done_names for s in active))
-    complete = len(unique) >= EARLY_RETURN_THRESHOLD or (all_sources_ok and len(unique) > 0)
+    # A THIN result that came back thin BECAUSE a source was blocked/cancelled is
+    # the worst case (e.g. AS24 Akamai-blocked → "Mazda 6" returns 3 Blocket cars):
+    # caching it as complete pins that 3 for an hour. So: trust the result only if
+    # we have plenty (early-return), OR everything succeeded, OR the union is at
+    # least HEALTHY_MIN deep (enough that a blocked source didn't starve it). A
+    # thin union with a blocked/errored source → degraded → short TTL → re-scrape.
+    HEALTHY_MIN = 40
+    complete = (len(unique) >= EARLY_RETURN_THRESHOLD
+                or (all_sources_ok and len(unique) > 0)
+                or len(unique) >= HEALTHY_MIN)
     if not complete:
         logger.info(f"[scrape] DEGRADED result ({len(unique)} cars; "
                     f"errored={errored or '∅'}, deadline_hit={deadline_hit}) "
-                    f"— caching with short TTL")
+                    f"— caching with short TTL, will re-scrape")
     return unique, complete
 
 

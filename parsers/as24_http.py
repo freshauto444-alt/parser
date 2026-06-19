@@ -32,6 +32,15 @@ if not HAS_CURL_CFFI:
 
 BASE_URL = "https://www.autoscout24.com"
 
+
+class AS24Blocked(Exception):
+    """AS24 returned a block (Akamai 404/403/429 or a challenge page with no
+    __NEXT_DATA__), as opposed to a genuine empty result set. Raised — instead of
+    returning [] — so the orchestrator can tell "source was blocked" from "source
+    legitimately found nothing" and mark the scrape DEGRADED (short cache TTL,
+    re-scrape soon) rather than caching a thin AS24-less result for a full hour."""
+
+
 _HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9,de;q=0.8",
@@ -505,12 +514,14 @@ async def search(
 
         if resp.status_code != 200:
             logger.warning(f"[as24] Page 1 HTTP {resp.status_code}" + (" (challenge?)" if resp.status_code in (403, 429) else ""))
-            return [], 0
+            # A non-200 after retry+fallback is a block, not an empty result —
+            # signal it so the orchestrator degrades (not caches) the scrape.
+            raise AS24Blocked(f"HTTP {resp.status_code}")
 
         nd = _extract_next_data(resp.text)
         if not nd:
             logger.warning(f"[as24] No __NEXT_DATA__ on page 1 — HTML {len(resp.text)}B (likely bot challenge)")
-            return [], 0
+            raise AS24Blocked(f"challenge page ({len(resp.text)}B, no __NEXT_DATA__)")
 
         pp = nd.get("props", {}).get("pageProps", {})
         total_count = pp.get("numberOfResults", 0)
