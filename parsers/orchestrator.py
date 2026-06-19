@@ -465,8 +465,8 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
                        "cupra", "abarth", "quadrifoglio", "m"}
         wanted_trims = req_tokens & _PERF_TRIMS
 
-        def _model_matches(c_model: str) -> bool:
-            cm = (c_model or "").lower().strip()
+        def _model_matches(c) -> bool:
+            cm = (c.model or "").lower().strip()
             if not cm:
                 return True  # unknown model → don't drop
             # Trim gate (runs FIRST so it overrides the permissive matches below):
@@ -475,7 +475,15 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
             # (trim ok, wrong base), and "Golf GTI" rejects "Polo GTI".
             if wanted_trims:
                 cm_tok = {t for t in re.split(r'[\s\-]+', cm) if t}
-                if not wanted_trims.issubset(cm_tok):
+                # The trim token can live in the `model` field (AS24/Bytbil label
+                # "Golf GTI") OR only in the listing title (Blocket labels the SAME
+                # car model="Golf-Serie" with "GTI" in title_line). Check both for
+                # trim PRESENCE — otherwise the gate silently drops every Blocket
+                # trim car (Golf GTI/RS6/AMG → 0 from Blocket). The base-model
+                # check stays on `model` so "Polo GTI" still fails "Golf GTI".
+                title_tok = {t for t in re.split(r'[\s\-]+', (c.title_line or "").lower()) if t}
+                trim_present = cm_tok | title_tok
+                if not wanted_trims.issubset(trim_present):
                     return False
                 base_tokens = req_tokens - wanted_trims
                 if base_tokens and not (base_tokens & cm_tok):
@@ -517,7 +525,7 @@ async def _scrape_all(params: dict, per_source: int = 20) -> tuple[list[ParsedCa
             return bool(req_tokens & cm_tokens)
 
         before = len(all_cars)
-        all_cars = [c for c in all_cars if _model_matches(c.model or "")]
+        all_cars = [c for c in all_cars if _model_matches(c)]
         if len(all_cars) != before:
             logger.info(f"[filter] model {before} → {len(all_cars)} (wanted={wanted_model})")
 

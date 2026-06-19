@@ -14,7 +14,7 @@ _PERF_TRIMS = {"gti", "gtd", "amg", "rs", "gts", "competition", "jcw",
                "cupra", "abarth", "quadrifoglio", "m"}
 
 
-def model_matches(wanted_model: str, c_model: str) -> bool:
+def model_matches(wanted_model: str, c_model: str, c_title: str = "") -> bool:
     wanted_model = (wanted_model or "").strip().lower()
     req_tokens = {t for t in re.split(r"[\s\-]+", wanted_model)
                   if t and t not in ("series", "class", "klasse")}
@@ -24,7 +24,10 @@ def model_matches(wanted_model: str, c_model: str) -> bool:
         return True
     if wanted_trims:
         cm_tok = {t for t in re.split(r"[\s\-]+", cm) if t}
-        if not wanted_trims.issubset(cm_tok):
+        # Trim presence checked across model + title (Blocket puts the trim only
+        # in the title: model="Golf-Serie", title="GTI Performance ...").
+        title_tok = {t for t in re.split(r"[\s\-]+", (c_title or "").lower()) if t}
+        if not wanted_trims.issubset(cm_tok | title_tok):
             return False
         base_tokens = req_tokens - wanted_trims
         if base_tokens and not (base_tokens & cm_tok):
@@ -67,6 +70,20 @@ CASES = [
     ("Passat", "Passat Variant", True), ("Passat", "Golf", False),
 ]
 
+# Blocket labels a trim car with the base model ("Golf-Serie") and the trim only
+# in the title — the gate must read the title for trim PRESENCE, else every
+# Blocket trim car is dropped (Golf GTI/RS6/AMG → 0 from Blocket).
+# (wanted, car_model, car_title, expected)
+TITLE_CASES = [
+    ("Golf GTI", "Golf-Serie", "GTI Performance 2.0 TSI DSG 230hk", True),
+    ("Golf GTI", "Golf VII", "Golf GTI Clubsport", True),
+    ("Golf GTI", "Golf-Serie", "1.5 TSI Comfort", False),       # base Golf, no GTI
+    ("Golf GTI", "Polo", "Polo GTI", False),                    # trim ok, wrong base
+    ("RS6", "RS6-Serie", "RS6 Avant 4.0 TFSI", True),
+    ("C 63 AMG", "C-Klass", "AMG C 63 S", True),                # AMG in title only
+    ("C 63 AMG", "E-Klass", "AMG E 63", False),                 # wrong base (no c/63)
+]
+
 
 def main() -> int:
     fails = []
@@ -74,10 +91,14 @@ def main() -> int:
         got = model_matches(wanted, car)
         if got != exp:
             fails.append(f"  model_matches({wanted!r}, {car!r}) = {got}, expected {exp}")
+    for wanted, car, title, exp in TITLE_CASES:
+        got = model_matches(wanted, car, title)
+        if got != exp:
+            fails.append(f"  model_matches({wanted!r}, {car!r}, title={title!r}) = {got}, expected {exp}")
     if fails:
         print("FAILED:\n" + "\n".join(fails))
         return 1
-    print(f"model-match gate: all {len(CASES)} cases passed.")
+    print(f"model-match gate: all {len(CASES) + len(TITLE_CASES)} cases passed.")
     return 0
 
 
