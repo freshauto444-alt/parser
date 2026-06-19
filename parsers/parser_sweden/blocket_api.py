@@ -334,17 +334,22 @@ async def parse_blocket_api(
         if deep_code:
             base_params.append(("variant", deep_code))
         else:
-            base_params.append(("variant", make_code))
+            # No deep trim node (Golf GTI/R, i30 N… are absent from Blocket's tree).
+            # Narrow as far as we can: resolve the BASE model (model minus the trim
+            # word) to its series/model node so Blocket searches within e.g. Golf
+            # instead of the whole make — make-level free-text returns a "солянка"
+            # of every VW. Then keep the free-text trim word + a post-filter on it.
+            model_norm = re.sub(r"[^a-z0-9]+", " ", model.lower()).strip() if model else ""
+            trim_in = next((tok for tok in _BLOCKET_TRIM_TOKENS
+                            if tok in model_norm.split()), None)
+            base_node = None
+            if trim_in and model:
+                base_model = " ".join(t for t in model.split() if t.lower() != trim_in)
+                base_node = resolve_variant(make_code, base_model) if base_model else None
+            base_params.append(("variant", base_node or make_code))
             if model:
                 base_params.append(("q", model))
-                # No precise node for this model. If it names a performance trim
-                # absent from the tree, remember the token to post-filter on so
-                # free-text doesn't leak base-model cars.
-                model_norm = re.sub(r"[^a-z0-9]+", " ", model.lower()).strip()
-                for tok in _BLOCKET_TRIM_TOKENS:
-                    if tok in model_norm.split():
-                        trim_token = tok
-                        break
+                trim_token = trim_in
     else:
         q = f"{brand} {model}".strip()
         if q:

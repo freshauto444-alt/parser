@@ -146,6 +146,26 @@ AS24_MODEL_CAT = {
 }
 
 
+# Perf-trim tokens AS24 breaks out as their own PATH slug (/brand/golf-gti,
+# /brand/golf-r…). When the request carries one of these AND the taxonomy only
+# resolved a base group, the slug is the precise target. AMG/M numeric perf cars
+# (C 63, X5 M) resolve to a precise `mt` motor cat instead, so they never reach
+# this set — and single-letter "r"/"n" only count alongside a base token (handled
+# by the >1-token guard).
+_AS24_TRIM_SLUG_TOKENS = {
+    "gti", "gtd", "gts", "r", "n", "cupra", "vz", "jcw", "abarth", "clubsport",
+}
+
+
+def _prefers_trim_slug(model: str, cat) -> bool:
+    """True when `model` names a perf trim but `cat` is only a base GROUP code
+    (no `mt` motor segment) — the AS24 trim path slug targets it far better."""
+    if not cat or re.search(r"mt\d", str(cat)):
+        return False  # no cat, or already a precise motor cat → keep the cat
+    toks = {t for t in re.split(r"[\s\-]+", (model or "").lower()) if t}
+    return len(toks) > 1 and bool(toks & _AS24_TRIM_SLUG_TOKENS)
+
+
 def build_as24_url(params: dict, page_num: int = 1, prefer_slug: bool = False) -> str:
     """Build AutoScout24 search URL using path-based format.
 
@@ -200,6 +220,16 @@ def build_as24_url(params: dict, page_num: int = 1, prefer_slug: bool = False) -
         or (AS24_MODEL_CAT.get((brand, model_base)) if model_base != model else None)
     )
     model_slug = AS24_MODEL_SLUG.get((brand, model)) or re.sub(r'\s+', '-', model).strip('-')
+
+    # Perf-trim slug preference. A base-GROUP cat (no `mt` motor code) returns the
+    # whole model line MIXED — cat=ma74gr100101 = all 9564 Golf, of which GTI is a
+    # sliver, so deep pagination still nets only a handful of GTI. AS24's trim PATH
+    # slug (/volkswagen/golf-gti = 1032 pure GTI) targets the trim directly. When
+    # the request names a perf trim and the cat resolved to a bare group, drop the
+    # cat so the slug below is used; the existing 404 fallback recovers to the base
+    # model if that particular trim has no slug.
+    if model_cat and _prefers_trim_slug(model, model_cat):
+        model_cat = None
 
     if brand and model_cat:
         url = f"{BASE_URL}{vtype_path}/{brand}?cat={model_cat}&sort=standard&desc=0&ustate=N%2CU&page={page_num}"
